@@ -48,6 +48,10 @@ fi
 export WANDB_MODE=${WANDB_MODE:-offline}
 export WANDB_ENTITY=${WANDB_ENTITY:-twojtys137-tw}
 export WANDB_PROJECT=${WANDB_PROJECT:-lpwm-sparse-generator}
+if [ "${REQUIRE_WANDB_ONLINE:-0}" = "1" ] && [ "${WANDB_MODE}" != "online" ]; then
+  echo "W&B online mode is required; authenticate and set WANDB_MODE=online" >&2
+  exit 1
+fi
 export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy}
 export WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 MASTER_ADDR=127.0.0.1
 if [ -z "${MASTER_PORT:-}" ]; then

@@ -125,8 +125,15 @@ RUN=1 SMOKE=1 bash scripts/sweep_sparse_generator_colab.sh
 The notebook [`notebooks/sparse_generator_colab.ipynb`](../notebooks/sparse_generator_colab.ipynb)
 contains the same workflow. It keeps the original dataset on fast, ephemeral Colab
 storage and writes checkpoints, Hydra outputs, and W&B files to MyDrive. Add
-`WANDB_API_KEY` through Colab Secrets; do not put the key in the notebook. Without
-the secret, W&B falls back to offline mode and its files remain on MyDrive.
+`WANDB_API_KEY` through Colab Secrets; do not put the key in the notebook. Missing
+secret access stops the notebook by default so a long run cannot silently start
+offline. An explicit offline run remains recoverable with `wandb sync`; the notebook
+includes a cell that finds and uploads the newest persisted offline run.
+
+```bash
+wandb sync --entity twojtys137-tw --project lpwm-sparse-generator \
+  /path/to/offline-run-YYYYMMDD_HHMMSS-RUN_ID
+```
 
 To use Wall instead, download `wall_single` and run with `ENV_NAME=wall`. Start with
 the smoke run, then use successive halving:
