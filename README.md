@@ -74,6 +74,18 @@ The Piecewise / OGBench-Cube variant carries its own copies under [`lpwm_swm/`](
 
 The [`scripts/`](scripts/README.md) folder contains instructions for how to run the entry point files `train.py` and `plan.py`. See `scripts/README.md` for more details. 
 
+### Experimental branch: dense state, sparse generator
+
+This fork also includes a slot-free experiment in which patch representations remain
+dense and signed while exact top-k sparsity is applied only to shared low-rank dynamics
+laws and token-to-token relations. See [`docs/sparse_generator.md`](docs/sparse_generator.md)
+for the architecture, controls, diagnostics, ablations, and Colab workflow.
+
+```bash
+export DATASET_DIR=/path/to/data
+SMOKE=1 bash scripts/train_sparse_generator_colab.sh
+```
+
 In the following section, we show examples of how to run the code with python commands. Before that, activate the conda environment and set `DATASET_DIR` environment.
 
 ### Training 

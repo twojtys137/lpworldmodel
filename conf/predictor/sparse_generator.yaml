@@ -1,0 +1,13 @@
+_target_: models.infojepa_modules.SparseGeneratorPredictor
+# Full relational variant. input/output dimensions, history and patch count are
+# injected by train.py.
+num_laws: 8
+law_rank: 32
+law_topk: 2
+edge_topk: 8
+query_chunk_size: 16
+gate_temperature: 1.0
+gate_balance_weight: 0.0
+base_mode: identity       # fixed residual; all learned dynamics pass through top-k laws
+exclude_self_edges: true
+record_graph: false

@@ -12,22 +12,26 @@
 #   scripts/train.sh <env> <frameskip> <num_hist> <epochs> <batch> <link> <feature> [target_p] [agg] [num_workers]
 #     <env>     : pusht | wall
 #     <link>    : reprelu (sparse LpWM) | identity (dense LeWM)
-#     <feature> : cls | patch
+#     <feature> : cls | patch (256 tokens) | patch64 (8x8 tokens, Colab-friendly)
 #     [target_p]: 1 (sparse rectified-Laplace) | 2 (dense Gaussian);  [agg]: b (default) | btp | bp | bt
 #
 # Method-knob env-var overrides (all optional):
-#   PREDICTOR (ar_adaln|ar_adaln_d1|mlp_var|ltv|linear_var|linear_wb), PROJ_DIM (latent dim D),
+#   PREDICTOR (...|sparse_ltv|sparse_generator), PROJ_DIM (latent dim D),
 #   MU (sparsity), MUP=1 MUP_LR=1e-4, REG_WEIGHT, LAMB_VAR, LAMB_COV, VAR_SPACE, REGULARIZER
 #   (rdmreg|sigreg|none), TRAIN_ENCODER, SEED, RUN_NAME, WANDB_PROJECT, SAVE_EVERY, DEBUG=1,
 #   and CKPT_BASE (where run dirs are written; default ./runs).
 set -euo pipefail
 ENV=${1:?usage: train.sh <env> <frameskip> <num_hist> <epochs> <batch> <link> <feature> [target_p] [agg] [num_workers]}
 FRAMESKIP=${2:?need frameskip}; NUM_HIST=${3:?need num_hist}; EPOCHS=${4:?need epochs}
-BATCH=${5:?need batch}; LINK=${6:?need link: reprelu|identity}; FEATURE=${7:?need feature: cls|patch}
+BATCH=${5:?need batch}; LINK=${6:?need link: reprelu|identity}; FEATURE=${7:?need feature: cls|patch|patch64}
 case "${LINK}" in reprelu) DEFP=1.0;; identity) DEFP=2.0;; *) DEFP=1.0;; esac
 TARGET_P=${8:-${DEFP}}; AGG=${9:-b}; NUM_WORKERS=${10:-20}
-case "${FEATURE}" in cls) ENCODER=vit_scratch;; patch) ENCODER=vit_scratch_patch;;
-  *) echo "feature must be cls|patch" >&2; exit 1;; esac
+case "${FEATURE}" in
+  cls) ENCODER=vit_scratch;;
+  patch) ENCODER=vit_scratch_patch;;
+  patch64) ENCODER=vit_scratch_patch64;;
+  *) echo "feature must be cls|patch|patch64" >&2; exit 1;;
+esac
 ENCODER=${ENCODER_OVERRIDE:-${ENCODER}}
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -41,7 +45,7 @@ export MASTER_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)
 
 EXTRA=""; TAG=""
 add(){ EXTRA="${EXTRA} $1"; }
-[ -n "${LR:-}" ]         && { add "training.encoder_lr=${LR} training.predictor_lr=${LR} training.action_encoder_lr=${LR} training.link_lr=${LR}"; TAG="${TAG}_lr${LR}"; }
+[ -n "${LR:-}" ]         && { add "training.encoder_lr=${LR} training.predictor_lr=${LR} training.action_encoder_lr=${LR}"; TAG="${TAG}_lr${LR}"; }
 [ -n "${REG_WEIGHT:-}" ] && { add "reg_weight=${REG_WEIGHT}"; TAG="${TAG}_rw${REG_WEIGHT}"; }
 [ -n "${LAMB_VAR:-}" ]   && { add "lamb_var=${LAMB_VAR}"; TAG="${TAG}_lv${LAMB_VAR}"; }
 [ -n "${LAMB_COV:-}" ]   && { add "lamb_cov=${LAMB_COV}"; TAG="${TAG}_lc${LAMB_COV}"; }
@@ -52,6 +56,17 @@ add(){ EXTRA="${EXTRA} $1"; }
 [ -n "${MUP_LR:-}" ]     && { add "training.mup_lr=${MUP_LR}"; TAG="${TAG}_mlr${MUP_LR}"; }
 [ -n "${SEED:-}" ]       && { add "training.seed=${SEED}"; TAG="${TAG}_seed${SEED}"; }
 [ -n "${PROJ_DIM:-}" ]   && { add "encoder.proj_dim=${PROJ_DIM} action_emb_dim=${PROJ_DIM}"; TAG="${TAG}_pd${PROJ_DIM}"; }
+[ -n "${ENCODER_DIM:-}" ] && add "embed_dim=${ENCODER_DIM}"
+[ -n "${NUM_PROJECTIONS:-}" ] && add "regularizer.num_projections=${NUM_PROJECTIONS}"
+[ -n "${N_ROLLOUT:-}" ] && add "env.dataset.n_rollout=${N_ROLLOUT}"
+[ -n "${LAW_TOPK:-}" ] && add "predictor.law_topk=${LAW_TOPK}"
+[ -n "${EDGE_TOPK:-}" ] && add "predictor.edge_topk=${EDGE_TOPK}"
+[ -n "${NUM_LAWS:-}" ] && add "predictor.num_laws=${NUM_LAWS}"
+[ -n "${LAW_RANK:-}" ] && add "predictor.law_rank=${LAW_RANK}"
+[ -n "${QUERY_CHUNK_SIZE:-}" ] && add "predictor.query_chunk_size=${QUERY_CHUNK_SIZE}"
+[ -n "${GATE_BALANCE_WEIGHT:-}" ] && add "predictor.gate_balance_weight=${GATE_BALANCE_WEIGHT}"
+[ -n "${BASE_MODE:-}" ] && add "predictor.base_mode=${BASE_MODE}"
+[ -n "${LTV_TOPK:-}" ] && add "predictor.topk=${LTV_TOPK}"
 [ -n "${SAVE_EVERY:-}" ] && add "training.save_every_x_epoch=${SAVE_EVERY}"
 [ -n "${TRAIN_ENCODER:-}" ] && add "model.train_encoder=${TRAIN_ENCODER}"
 [ -n "${WANDB_PROJECT:-}" ] && add "wandb_project=${WANDB_PROJECT}"

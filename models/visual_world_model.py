@@ -284,7 +284,17 @@ class VWorldModel(nn.Module):
 
         loss = z_loss
         loss_components["z_loss"] = z_loss
-        loss_components["z_visual_loss"] = z_loss  # CLS-only: all of z is visual
+        loss_components["z_visual_loss"] = z_loss  # all tokens in the AdaLN path are visual
+
+        # Sparse-generator predictors keep the representation dense and put optional
+        # regularization/diagnostics on their shared operator routing instead.
+        base_predictor = self.predictor.module if hasattr(self.predictor, "module") else self.predictor
+        if hasattr(base_predictor, "auxiliary_losses"):
+            for name, auxiliary_loss in base_predictor.auxiliary_losses().items():
+                loss = loss + auxiliary_loss
+                loss_components[name] = auxiliary_loss
+        if hasattr(base_predictor, "diagnostics"):
+            loss_components.update(base_predictor.diagnostics())
 
         loss_components["l0_frac"] = (z_emb != 0).float().mean()
 

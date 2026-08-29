@@ -415,6 +415,9 @@ class LinearDynamicsPredictor(nn.Module):
         never emits a matrix, only a small gate g(z_t)=sigmoid(gate·z_t)∈R^r selects among fixed
         low-rank directions). rank r = # state-selected modes; U-factors 0-inited so it starts == mlp_var.
         Shared nonlinear core across dense/sparse (only the link differs). Between MLP∘LTI and Shallow-AdaLN.
+    mode="sparse_ltv" is the same operator bank, but exactly `topk` of its `rank` modes are
+        active per token/lag.  Sparsity therefore lives in the dynamics operator rather than
+        in the representation.  Use it with patch features and the identity link.
 
     Initialised near the identity map (d(a)=1, low-rank=0 / W=I / lag0=I & older-lags=0, B=0)
     so the untrained predictor is z_{t+1}=z_t (mirrors AdaLN-zero); the invariance loss shapes it.
@@ -432,6 +435,9 @@ class LinearDynamicsPredictor(nn.Module):
         hidden_dim=None,
         mode="action_linear",
         rank=16,
+        topk=2,
+        gate_temperature=1.0,
+        gate_balance_weight=0.0,
         act_hidden=256,
         **kwargs,
     ):
@@ -439,9 +445,16 @@ class LinearDynamicsPredictor(nn.Module):
         D = input_dim
         out = output_dim or input_dim
         assert out == D, f"linear predictor assumes output_dim==input_dim (code space), got {out} vs {D}"
-        assert mode in {"action_linear", "additive", "var", "mlp_var", "ltv"}, f"mode {mode} not supported"
+        assert mode in {"action_linear", "additive", "var", "mlp_var", "ltv", "sparse_ltv"}, (
+            f"mode {mode} not supported"
+        )
         self.mode = mode
         self.rank = rank
+        self.topk = topk
+        self.gate_temperature = gate_temperature
+        self.gate_balance_weight = gate_balance_weight
+        self._aux_losses = {}
+        self._diagnostics = {}
         if mode == "additive":  # LTI(1): z' = W z + B a
             self.W = nn.Linear(D, D, bias=True)
             self.B = nn.Linear(D, D, bias=False)   # action embedding has dim D (adaln)
@@ -465,8 +478,10 @@ class LinearDynamicsPredictor(nn.Module):
                 nn.init.normal_(lin.weight, mean=0.0, std=D ** -0.5)  # muP hidden init N(0, 1/fan_in)
                 if lin.bias is not None:
                     nn.init.zeros_(lin.bias)
-        elif mode == "ltv":  # DATA-DEPENDENT VAR + nonlinear readout:
+        elif mode in {"ltv", "sparse_ltv"}:  # DATA-DEPENDENT VAR + nonlinear readout:
             r = rank
+            assert 1 <= topk <= r, f"topk must be in [1, rank], got {topk} for rank={r}"
+            assert gate_temperature > 0, "gate_temperature must be positive"
             self.n_lags = num_frames
             self.rank = r
             self.lags = nn.ModuleList([nn.Linear(D, D, bias=(k == 0)) for k in range(num_frames)])
@@ -493,6 +508,49 @@ class LinearDynamicsPredictor(nn.Module):
             nn.init.zeros_(self.to_d[-1].weight); nn.init.ones_(self.to_d[-1].bias)
             nn.init.zeros_(self.to_uv[-1].weight); nn.init.zeros_(self.to_uv[-1].bias)
 
+    def auxiliary_losses(self):
+        """Weighted routing losses produced by the most recent forward pass."""
+        return self._aux_losses
+
+    def diagnostics(self):
+        """Detached routing statistics produced by the most recent forward pass."""
+        return self._diagnostics
+
+    def _ltv_gates(self, logits):
+        soft = torch.sigmoid(logits / self.gate_temperature)
+        if self.mode != "sparse_ltv":
+            self._aux_losses = {}
+            self._diagnostics = {}
+            return soft
+
+        indices = logits.topk(self.topk, dim=-1).indices
+        support = torch.zeros_like(logits).scatter_(-1, indices, 1.0)
+        # Binary top-k in the forward pass, sigmoid gradients in the backward pass.
+        gates = support.detach() - soft.detach() + soft
+
+        usage = support.mean(dim=(0, 1, 2, 3))
+        differentiable_usage = gates.mean(dim=(0, 1, 2, 3))
+        usage_prob = usage / usage.sum().clamp_min(1e-8)
+        if self.rank > 1:
+            usage_entropy = -(usage_prob * usage_prob.clamp_min(1e-8).log()).sum() / math.log(self.rank)
+        else:
+            usage_entropy = usage.new_tensor(1.0)
+        balance = (differentiable_usage - float(self.topk) / self.rank).square().mean()
+        switch = (
+            (support[:, 1:] - support[:, :-1]).abs().mean()
+            if support.shape[1] > 1
+            else support.new_zeros(())
+        )
+        self._aux_losses = {}
+        if self.gate_balance_weight > 0:
+            self._aux_losses["generator_balance_loss"] = self.gate_balance_weight * balance
+        self._diagnostics = {
+            "generator_active_fraction": support.mean().detach(),
+            "generator_usage_entropy": usage_entropy.detach(),
+            "generator_switch_rate": switch.detach(),
+        }
+        return gates
+
     def forward(self, x, c):
         """x: (B,T,P,D) codes; c: (B,T,D) action embeddings -> (B,T,P,D)."""
         B, T, P, D = x.shape
@@ -513,9 +571,10 @@ class LinearDynamicsPredictor(nn.Module):
                 u = u + torch.cat([x.new_zeros(B, k, P, D), xk], dim=1)
             u = u + self.B(c).unsqueeze(2)               # + B a_t
             return self.W(torch.relu(u))
-        if self.mode == "ltv":  # state-gated low-rank VAR core -> ReLU -> readout W
+        if self.mode in {"ltv", "sparse_ltv"}:  # state-gated low-rank VAR core -> ReLU -> readout W
             r = self.rank
-            g = torch.sigmoid(self.gate(x)).view(B, T, P, self.n_lags + 1, r)   # gates g(z_t) from current frame
+            gate_logits = self.gate(x).view(B, T, P, self.n_lags + 1, r)
+            g = self._ltv_gates(gate_logits)                                    # dense or exact top-k gates
             core = self.lags[0](x) + self.Ulag[0](g[..., 0, :] * self.Vlag[0](x))   # k=0 (no shift)
             for k in range(1, self.n_lags):
                 if k >= T:
@@ -539,6 +598,236 @@ class LinearDynamicsPredictor(nn.Module):
         Vtz = torch.einsum("btdr,btpd->btpr", V, x)         # V^T z  (B,T,P,r)
         lowrank = torch.einsum("btdr,btpr->btpd", U, Vtz)   # U (V^T z)  (B,T,P,D)
         return diag_part + lowrank
+
+
+class SparseGeneratorPredictor(nn.Module):
+    """Dense patch state with sparse, shared relational dynamics generators.
+
+    The state ``x`` remains a dense signed tensor ``(B,T,P,D)``.  A bank of
+    ``num_laws`` shared low-rank operators routes messages between patches; exactly
+    ``law_topk`` laws and ``edge_topk`` source patches are active for each target
+    patch.  With the default fixed identity base, every learned state change --
+    relational, temporal, or action-induced -- passes through that sparse bank.
+    No slot or object labels are introduced.  Because every routing and
+    message function is shared over patch indices, the predictor is equivariant to
+    a simultaneous permutation of the patch axis.
+
+    A chunked pairwise router bounds activation memory at O(B*T*M*C*P), where C is
+    ``query_chunk_size``, while keeping the exact same function as the unchunked
+    implementation.  This matters for Colab-scale experiments with 64+ patches.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_dim,
+        output_dim=None,
+        num_frames=1,
+        num_patches=1,
+        hidden_dim=None,
+        num_laws=8,
+        law_rank=32,
+        law_topk=2,
+        edge_topk=8,
+        query_chunk_size=16,
+        gate_temperature=1.0,
+        gate_balance_weight=0.0,
+        base_mode="identity",
+        exclude_self_edges=True,
+        record_graph=False,
+        **kwargs,
+    ):
+        super().__init__()
+        D = input_dim
+        out = output_dim or D
+        assert out == D, f"sparse generator assumes output_dim==input_dim, got {out} vs {D}"
+        assert num_laws >= 1 and 1 <= law_topk <= num_laws
+        assert law_rank >= 1 and edge_topk >= 1 and query_chunk_size >= 1
+        assert gate_temperature > 0
+        assert base_mode in {"identity", "learned"}
+
+        self.num_frames = num_frames
+        self.num_patches = num_patches
+        self.num_laws = num_laws
+        self.law_rank = law_rank
+        self.law_topk = law_topk
+        self.edge_topk = edge_topk
+        self.query_chunk_size = query_chunk_size
+        self.gate_temperature = gate_temperature
+        self.gate_balance_weight = gate_balance_weight
+        self.base_mode = base_mode
+        self.exclude_self_edges = exclude_self_edges
+        self.record_graph = record_graph
+
+        # The default base is a fixed identity residual, so no dense dynamics path
+        # can bypass the sparse law bank. A learned dense VAR is retained only as an
+        # explicit ablation/control.
+        if base_mode == "learned":
+            self.lags = nn.ModuleList([nn.Linear(D, D, bias=(k == 0)) for k in range(num_frames)])
+            self.B = nn.Linear(D, D, bias=False)
+            nn.init.eye_(self.lags[0].weight)
+            nn.init.zeros_(self.lags[0].bias)
+            for lag in self.lags[1:]:
+                nn.init.zeros_(lag.weight)
+            nn.init.zeros_(self.B.weight)
+        else:
+            self.lags = None
+            self.B = None
+
+        # Shared law router and low-rank operator bank.
+        self.state_norm = nn.LayerNorm(D)
+        self.action_norm = nn.LayerNorm(D)
+        self.q_proj = nn.Linear(D, num_laws * law_rank, bias=False)
+        self.k_proj = nn.Linear(D, num_laws * law_rank, bias=False)
+        self.v_proj = nn.Linear(D, num_laws * law_rank, bias=False)
+        self.history_value = nn.ModuleList(
+            [nn.Linear(D, num_laws * law_rank, bias=False) for _ in range(num_frames - 1)]
+        )
+        self.action_value = nn.Linear(D, num_laws * law_rank, bias=False)
+        self.state_gate = nn.Linear(D, num_laws)
+        self.action_gate = nn.Linear(D, num_laws, bias=False)
+        self.law_up = nn.Parameter(torch.empty(num_laws, law_rank, D))
+
+        for module in (
+            self.q_proj,
+            self.k_proj,
+            self.v_proj,
+            *self.history_value,
+            self.action_value,
+            self.state_gate,
+            self.action_gate,
+        ):
+            nn.init.normal_(module.weight, mean=0.0, std=D ** -0.5)
+            if getattr(module, "bias", None) is not None:
+                nn.init.zeros_(module.bias)
+        # Near-identity, but not exactly zero: the router receives gradient on step one.
+        nn.init.normal_(self.law_up, mean=0.0, std=1e-3 * law_rank ** -0.5)
+
+        self._aux_losses = {}
+        self._diagnostics = {}
+        self._last_graph = None
+
+    def auxiliary_losses(self):
+        return self._aux_losses
+
+    def diagnostics(self):
+        return self._diagnostics
+
+    def generator_graph(self):
+        """Routing support for sample 0 at the final time, or ``None`` if disabled."""
+        return self._last_graph
+
+    @staticmethod
+    def _straight_through_sparse_distribution(logits, topk, temperature):
+        dense = torch.softmax(logits / temperature, dim=-1)
+        indices = logits.topk(topk, dim=-1).indices
+        support = torch.zeros_like(logits).scatter_(-1, indices, 1.0)
+        sparse = dense * support
+        sparse = sparse / sparse.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        # Sparse normalized values forward; dense-softmax gradients backward.
+        routed = sparse.detach() - dense.detach() + dense
+        return routed, support
+
+    def _dense_temporal_core(self, x, c):
+        if self.base_mode == "identity":
+            return x
+        B, T, P, D = x.shape
+        core = self.lags[0](x)
+        for k in range(1, self.num_frames):
+            if k >= T:
+                break
+            lagged = self.lags[k](x[:, : T - k])
+            core = core + torch.cat([x.new_zeros(B, k, P, D), lagged], dim=1)
+        return core + self.B(c).unsqueeze(2)
+
+    def forward(self, x, c):
+        """x: (B,T,P,D), c: (B,T,D) -> dense signed (B,T,P,D)."""
+        B, T, P, D = x.shape
+        M, R = self.num_laws, self.law_rank
+        if c.shape[:2] != (B, T) or c.shape[-1] != D:
+            raise ValueError(f"expected action shape {(B, T, D)}, got {tuple(c.shape)}")
+
+        state = self.state_norm(x)
+        action = self.action_norm(c)
+        q = self.q_proj(state).view(B, T, P, M, R).permute(0, 1, 3, 2, 4)
+        k = self.k_proj(state).view(B, T, P, M, R).permute(0, 1, 3, 2, 4)
+        v = self.v_proj(state).view(B, T, P, M, R).permute(0, 1, 3, 2, 4)
+        temporal_value = x.new_zeros(B, T, M, P, R)
+        for lag, projection in enumerate(self.history_value, start=1):
+            if lag >= T:
+                break
+            delta = x[:, lag:] - x[:, : T - lag]
+            delta_value = projection(delta).view(B, T - lag, P, M, R).permute(0, 1, 3, 2, 4)
+            padding = x.new_zeros(B, lag, M, P, R)
+            temporal_value = temporal_value + torch.cat([padding, delta_value], dim=1)
+        action_value = self.action_value(action).view(B, T, M, R).unsqueeze(3)
+
+        law_logits = self.state_gate(state) + self.action_gate(action).unsqueeze(2)
+        law_distribution, law_support = self._straight_through_sparse_distribution(
+            law_logits, self.law_topk, self.gate_temperature
+        )  # (B,T,P,M)
+        law_gate = law_distribution.permute(0, 1, 3, 2)  # (B,T,M,P)
+
+        max_edges = P - 1 if self.exclude_self_edges and P > 1 else P
+        edge_topk = min(self.edge_topk, max_edges)
+        chunks = []
+        graph_chunks = []
+        source_index = torch.arange(P, device=x.device)
+        for start in range(0, P, self.query_chunk_size):
+            stop = min(start + self.query_chunk_size, P)
+            q_chunk = q[:, :, :, start:stop]
+            scores = torch.einsum("btmcr,btmpr->btmcp", q_chunk, k) / math.sqrt(R)
+            if self.exclude_self_edges and P > 1:
+                query_index = torch.arange(start, stop, device=x.device)
+                self_mask = query_index[:, None] == source_index[None, :]
+                scores = scores.masked_fill(self_mask.view(1, 1, 1, stop - start, P), -torch.inf)
+
+            edge_weights, edge_support = self._straight_through_sparse_distribution(
+                scores, edge_topk, self.gate_temperature
+            )
+            message = torch.einsum("btmcp,btmpr->btmcr", edge_weights, v)
+            message = message + temporal_value[:, :, :, start:stop] + action_value
+            message = torch.einsum("btmcr,mrd->btmcd", message, self.law_up)
+            message = message * law_gate[:, :, :, start:stop].unsqueeze(-1)
+            chunks.append(message.sum(dim=2))
+            if self.record_graph:
+                graph_chunks.append(edge_support[0, -1].detach().bool())
+
+        relation_update = torch.cat(chunks, dim=2)
+        output = self._dense_temporal_core(x, c) + relation_update
+
+        usage = law_support.mean(dim=(0, 1, 2))
+        usage_prob = usage / usage.sum().clamp_min(1e-8)
+        if M > 1:
+            usage_entropy = -(usage_prob * usage_prob.clamp_min(1e-8).log()).sum() / math.log(M)
+        else:
+            usage_entropy = usage.new_tensor(1.0)
+        differentiable_usage = law_distribution.mean(dim=(0, 1, 2))
+        balance = (differentiable_usage - 1.0 / M).square().mean()
+        switch = (
+            (law_support[:, 1:] - law_support[:, :-1]).abs().mean()
+            if T > 1
+            else law_support.new_zeros(())
+        )
+        self._aux_losses = {}
+        if self.gate_balance_weight > 0:
+            self._aux_losses["generator_balance_loss"] = self.gate_balance_weight * balance
+        self._diagnostics = {
+            "generator_active_fraction": law_support.mean().detach(),
+            "generator_edge_fraction": x.new_tensor(float(edge_topk) / P),
+            "generator_usage_entropy": usage_entropy.detach(),
+            # Diagnostic only: never optimized, because fixed patch-index persistence is
+            # not transport-covariant when objects move through the image.
+            "generator_switch_rate": switch.detach(),
+        }
+        if self.record_graph:
+            self._last_graph = {
+                "law_support": law_support[0, -1].detach().bool().transpose(0, 1),
+                "edge_support": torch.cat(graph_chunks, dim=1),
+            }
+        else:
+            self._last_graph = None
+        return output
 
 
 
@@ -659,5 +948,3 @@ class RDMReg(nn.Module):
             base = base + self.mu
         target = (link(base) if link is not None else base).detach()
         return swd(z, target, self.num_projections)
-
-

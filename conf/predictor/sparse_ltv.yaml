@@ -1,0 +1,9 @@
+_target_: models.infojepa_modules.LinearDynamicsPredictor
+# Minimal intervention: keep the existing LTV low-rank operator bank, but route
+# exactly `topk` modes per token and lag. Use with patch tokens + identity link so
+# the state is dense while only the dynamics operator is sparse.
+mode: sparse_ltv
+rank: 16
+topk: 2
+gate_temperature: 1.0
+gate_balance_weight: 0.0

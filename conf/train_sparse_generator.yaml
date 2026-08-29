@@ -1,0 +1,78 @@
+defaults:
+  - _self_
+  - env: pusht
+  - encoder: vit_scratch_patch64
+  - action_encoder: lewm_embedder
+  - proprio_encoder: proprio
+  - decoder: vqvae
+  - predictor: sparse_generator
+  - link: identity
+  - regularizer: rdmreg_colab
+
+ckpt_base_path: ./runs
+
+hydra:
+  run:
+    dir: ${ckpt_base_path}/outputs/sparse_generator_${now:%Y%m%d_%H%M%S}
+
+training:
+  seed: 0
+  epochs: 2
+  batch_size: 16
+  save_every_x_epoch: 1
+  reconstruct_every_x_batch: 500
+  num_reconstruct_samples: 6
+  encoder_lr: 1e-4
+  decoder_lr: 3e-4
+  predictor_lr: 1e-4
+  action_encoder_lr: 1e-4
+  mup_lr: 1e-4
+  mup_base_width: 192
+  mup_weight_decay: 0.01
+
+img_size: 224
+frameskip: 5
+concat_dim: 0
+embed_dim: 192
+normalize_action: true
+
+# Dense signed state; sparsity is controlled only inside the predictor routing.
+action_conditioning: adaln
+reg_weight: 0.5
+detach_target: false
+lamb_var: 0.0
+lamb_cov: 0.0
+var_space: u
+target_p: 2.0
+mu: 0.0
+agg: btp
+
+action_emb_dim: ${embed_dim}
+num_action_repeat: 1
+proprio_emb_dim: 10
+num_proprio_repeat: 1
+
+num_hist: 3
+num_pred: 1
+has_predictor: true
+has_decoder: false
+
+model:
+  _target_: models.visual_world_model.VWorldModel
+  image_size: ${img_size}
+  num_hist: ${num_hist}
+  num_pred: ${num_pred}
+  train_encoder: true
+  train_predictor: true
+  train_decoder: false
+
+debug: false
+mup: false
+wandb_project: lpwm_sparse_generator
+
+plan_settings:
+  plan_cfg_path: null
+  planner: [cem]
+  goal_source: [dset]
+  goal_H: [5]
+  alpha: [0.1]

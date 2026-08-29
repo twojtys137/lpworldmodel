@@ -1,0 +1,7 @@
+_target_: models.infojepa_modules.RDMReg
+target_p: ${target_p}
+# 256 is sufficient for screening runs and much cheaper than the paper-scale 8192.
+# Raise this only for the final confirmatory runs.
+num_projections: 256
+agg: ${agg}
+mu: ${mu}

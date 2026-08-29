@@ -1,0 +1,12 @@
+_target_: models.infojepa_modules.SparseGeneratorPredictor
+# Architecture-matched control: all laws and all non-self relations are active.
+num_laws: 8
+law_rank: 32
+law_topk: 8
+edge_topk: 64
+query_chunk_size: 16
+gate_temperature: 1.0
+gate_balance_weight: 0.0
+base_mode: identity
+exclude_self_edges: true
+record_graph: false

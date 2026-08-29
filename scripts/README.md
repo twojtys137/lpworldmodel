@@ -28,6 +28,8 @@ Checkpoints/run dirs are written under `CKPT_BASE` (default `./runs`); override 
 | `train.sh` | one training run of the from-scratch JEPA world model |
 | `plan.sh`  | CEM + MPC planning eval of a trained checkpoint |
 | `reproduce_pusht.sh` | drives the full PushT sparsity-vs-linearity grid (train + eval per cell) |
+| `train_sparse_generator_colab.sh` | budgeted dense-patch / sparse-law PushT experiment |
+| `sweep_sparse_generator_colab.sh` | dry-run/execute the controlled dense-state ablations |
 
 Each script's header comment lists its positional args and env-var knobs.
 
@@ -44,4 +46,12 @@ scripts/plan.sh plan_lewm.yaml my_lpwm latest 50 10
 # preview the full reproduction grid (prints the per-cell commands), then run it:
 bash scripts/reproduce_pusht.sh
 RUN=1 bash scripts/reproduce_pusht.sh
+
+# dense signed patch state; exact top-k sparsity only in the dynamics generator:
+SMOKE=1 bash scripts/train_sparse_generator_colab.sh
+bash scripts/train_sparse_generator_colab.sh
+
+# inspect, then execute the controlled predictor/generator ablation:
+bash scripts/sweep_sparse_generator_colab.sh
+RUN=1 SMOKE=1 bash scripts/sweep_sparse_generator_colab.sh
 ```

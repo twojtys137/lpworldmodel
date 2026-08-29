@@ -1,0 +1,14 @@
+_target_: models.vit_encoder.ViTEncoder
+image_size: ${img_size}
+patch_size: 28          # 224 / 28 = 8, hence 64 dense patch tokens
+dim: ${embed_dim}
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+dropout: 0.0
+emb_dropout: 0.0
+feature: patch
+proj_hidden: 768
+proj_dim: ${embed_dim}
+name: vit_scratch_patch64
