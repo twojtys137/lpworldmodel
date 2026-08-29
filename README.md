@@ -47,7 +47,16 @@ The `lpwm_swm/` component for Piecewise and OGBench-Cube environments for Sectio
 ## Datasets
 
 The Wall and PushT datasets are taken from [DINO-WM](https://github.com/gaoyuezhou/dino_wm), available
-[here](https://osf.io/bmw48/?view_only=a56a296ce3b24cceaf408383a175ce28). Set the environment variable for the path to the dataset. 
+[here](https://osf.io/bmw48/?view_only=a56a296ce3b24cceaf408383a175ce28). The bundled downloader fetches the exact OSF archives, supports resume, verifies their byte sizes and SHA-256 checksums, and preserves the original layout:
+
+```bash
+python scripts/download_lpwmdatasets.py --dataset pusht_noise --output-dir /path/to/data
+python scripts/download_lpwmdatasets.py --dataset wall_single --output-dir /path/to/data
+# or: --dataset all
+```
+
+Set the environment variable for the resulting dataset root.
+
 ```bash
 export DATASET_DIR=/path/to/data
 ```
@@ -82,9 +91,14 @@ laws and token-to-token relations. See [`docs/sparse_generator.md`](docs/sparse_
 for the architecture, controls, diagnostics, ablations, and Colab workflow.
 
 ```bash
+python scripts/download_lpwmdatasets.py --dataset pusht_noise --output-dir /path/to/data
 export DATASET_DIR=/path/to/data
 SMOKE=1 bash scripts/train_sparse_generator_colab.sh
 ```
+
+For the ready-to-run Colab workflow, including local dataset storage, persistent
+MyDrive outputs, and W&B logging, open
+[`notebooks/sparse_generator_colab.ipynb`](notebooks/sparse_generator_colab.ipynb).
 
 In the following section, we show examples of how to run the code with python commands. Before that, activate the conda environment and set `DATASET_DIR` environment.
 

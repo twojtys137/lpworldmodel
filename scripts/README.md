@@ -10,11 +10,14 @@ invocation in your own job submission.
    ```bash
    conda activate lpwm
    ```
-2. Point `DATASET_DIR` at the dataset root (the folder holding `pusht_noise/` and `wall_single/`):
+2. Download the exact original data and point `DATASET_DIR` at its root:
    ```bash
+   python scripts/download_lpwmdatasets.py --dataset pusht_noise --output-dir /path/to/data
+   # Use --dataset wall_single or --dataset all when needed.
    export DATASET_DIR=/path/to/data
    ```
-3. Optional: `wandb login` to log runs, or `export WANDB_MODE=offline` to skip.
+3. Optional: `wandb login` to log runs, or `export WANDB_MODE=offline` to skip. The
+   sparse-generator config accepts `WANDB_ENTITY` and `WANDB_PROJECT`.
 
 PushT (`pymunk`/`pygame`) and Wall (`numpy`) are pure-Python — no simulator install is needed, and
 the scripts set `SDL_VIDEODRIVER=dummy` for headless pygame rendering automatically.
@@ -25,6 +28,7 @@ Checkpoints/run dirs are written under `CKPT_BASE` (default `./runs`); override 
 
 | script | what it does |
 |---|---|
+| `download_lpwmdatasets.py` | resumes, verifies, and extracts the original PushT/Wall OSF archives |
 | `train.sh` | one training run of the from-scratch JEPA world model |
 | `plan.sh`  | CEM + MPC planning eval of a trained checkpoint |
 | `reproduce_pusht.sh` | drives the full PushT sparsity-vs-linearity grid (train + eval per cell) |
@@ -50,6 +54,9 @@ RUN=1 bash scripts/reproduce_pusht.sh
 # dense signed patch state; exact top-k sparsity only in the dynamics generator:
 SMOKE=1 bash scripts/train_sparse_generator_colab.sh
 bash scripts/train_sparse_generator_colab.sh
+
+# same architecture on the original Wall data:
+ENV_NAME=wall SMOKE=1 bash scripts/train_sparse_generator_colab.sh
 
 # inspect, then execute the controlled predictor/generator ablation:
 bash scripts/sweep_sparse_generator_colab.sh

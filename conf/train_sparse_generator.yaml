@@ -68,7 +68,8 @@ model:
 
 debug: false
 mup: false
-wandb_project: lpwm_sparse_generator
+wandb_entity: ${oc.env:WANDB_ENTITY,twojtys137-tw}
+wandb_project: ${oc.env:WANDB_PROJECT,lpwm-sparse-generator}
 
 plan_settings:
   plan_cfg_path: null

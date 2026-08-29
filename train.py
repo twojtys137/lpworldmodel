@@ -89,10 +89,12 @@ class Trainer:
 
             wandb_dict = OmegaConf.to_container(cfg, resolve=True)
             _proj = self.cfg.get("wandb_project", None) or f"InfoJEPA_train_{self.cfg.env.name}"
+            _entity = self.cfg.get("wandb_entity", None) or os.environ.get("WANDB_ENTITY")
             if self.cfg.debug:
                 log.info("WARNING: Running in debug mode...")
                 _proj = f"{_proj}_debug"
             self.wandb_run = wandb.init(
+                entity=_entity,
                 project=_proj,
                 config=wandb_dict,
                 id=wandb_run_id,

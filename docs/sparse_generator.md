@@ -109,7 +109,11 @@ laws of rank 32, two active laws, eight incoming relations, and 256 RDMReg
 projections. It is intentionally smaller than a paper-scale run.
 
 ```bash
-export DATASET_DIR=/path/to/data
+python scripts/download_lpwmdatasets.py --dataset pusht_noise --output-dir /content/lpwm-data
+export DATASET_DIR=/content/lpwm-data
+export CKPT_BASE=/content/drive/MyDrive/lpwm-sparse-generator
+export WANDB_ENTITY=twojtys137-tw
+export WANDB_PROJECT=lpwm-sparse-generator
 SMOKE=1 bash scripts/train_sparse_generator_colab.sh
 bash scripts/train_sparse_generator_colab.sh
 
@@ -119,7 +123,13 @@ RUN=1 SMOKE=1 bash scripts/sweep_sparse_generator_colab.sh
 ```
 
 The notebook [`notebooks/sparse_generator_colab.ipynb`](../notebooks/sparse_generator_colab.ipynb)
-contains the same workflow. Start with the smoke run, then use successive halving:
+contains the same workflow. It keeps the original dataset on fast, ephemeral Colab
+storage and writes checkpoints, Hydra outputs, and W&B files to MyDrive. Add
+`WANDB_API_KEY` through Colab Secrets; do not put the key in the notebook. Without
+the secret, W&B falls back to offline mode and its files remain on MyDrive.
+
+To use Wall instead, download `wall_single` and run with `ENV_NAME=wall`. Start with
+the smoke run, then use successive halving:
 
 1. one seed, 8 rollouts, one epoch;
 2. one seed, 50 rollouts, two epochs;
@@ -135,4 +145,4 @@ A useful controlled comparison keeps encoder, dense state, data, and optimizer f
 | matched relational | `dense_generator` | Does sparsity help with architecture fixed? |
 | relational | `sparse_generator` | Do sparse shared relations improve dynamics/planning? |
 
-Run the tests with `python -m pytest tests/test_sparse_generator.py`.
+Run the tests with `python -m pytest -q tests`.

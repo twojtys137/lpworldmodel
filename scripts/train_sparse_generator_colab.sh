@@ -1,10 +1,32 @@
 #!/bin/bash
-# Colab-scale PushT screening run for dense patch state + sparse shared generator.
-# Required: DATASET_DIR points to a folder containing pusht_noise/{train,val}.
+# Colab-scale LpWM screening run for dense patch state + sparse shared generator.
+# Required: DATASET_DIR contains the original pusht_noise/ or wall_single/ tree.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-: "${DATASET_DIR:?set DATASET_DIR to the dataset root containing pusht_noise/}"
+: "${DATASET_DIR:?set DATASET_DIR to the root created by download_lpwmdatasets.py}"
+
+ENV_NAME=${ENV_NAME:-pusht}
+case "${ENV_NAME}" in
+  pusht)
+    dataset_subdir=pusht_noise
+    NUM_HIST=${NUM_HIST:-3}
+    FRAMESKIP=${FRAMESKIP:-5}
+    ;;
+  wall)
+    dataset_subdir=wall_single
+    NUM_HIST=${NUM_HIST:-1}
+    FRAMESKIP=${FRAMESKIP:-5}
+    ;;
+  *)
+    echo "ENV_NAME must be pusht or wall" >&2
+    exit 1
+    ;;
+esac
+if [ ! -d "${DATASET_DIR}/${dataset_subdir}" ]; then
+  echo "Missing ${DATASET_DIR}/${dataset_subdir}; run scripts/download_lpwmdatasets.py first" >&2
+  exit 1
+fi
 
 EPOCHS=${EPOCHS:-2}
 BATCH_SIZE=${BATCH_SIZE:-16}
@@ -12,7 +34,7 @@ N_ROLLOUT=${N_ROLLOUT:-50}
 NUM_WORKERS=${NUM_WORKERS:-2}
 NUM_PROJECTIONS=${NUM_PROJECTIONS:-256}
 PREDICTOR=${PREDICTOR:-sparse_generator}
-RUN_NAME=${RUN_NAME:-${PREDICTOR}_pusht_seed${SEED:-0}}
+RUN_NAME=${RUN_NAME:-${PREDICTOR}_${ENV_NAME}_seed${SEED:-0}}
 CKPT_BASE=${CKPT_BASE:-${REPO}/runs}
 
 if [ "${SMOKE:-0}" = "1" ]; then
@@ -24,6 +46,8 @@ if [ "${SMOKE:-0}" = "1" ]; then
 fi
 
 export WANDB_MODE=${WANDB_MODE:-offline}
+export WANDB_ENTITY=${WANDB_ENTITY:-twojtys137-tw}
+export WANDB_PROJECT=${WANDB_PROJECT:-lpwm-sparse-generator}
 export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy}
 export WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 MASTER_ADDR=127.0.0.1
 if [ -z "${MASTER_PORT:-}" ]; then
@@ -67,11 +91,16 @@ case "${PREDICTOR}" in
 esac
 
 cd "${REPO}"
+echo "Environment: ${ENV_NAME}; data: ${DATASET_DIR}/${dataset_subdir}"
+echo "Persistent run directory: ${CKPT_BASE}/outputs/${RUN_NAME}"
+echo "W&B: ${WANDB_MODE} (${WANDB_ENTITY}/${WANDB_PROJECT})"
 python train.py --config-name train_sparse_generator.yaml \
+  env="${ENV_NAME}" frameskip="${FRAMESKIP}" num_hist="${NUM_HIST}" \
   predictor="${PREDICTOR}" \
   training.epochs="${EPOCHS}" training.batch_size="${BATCH_SIZE}" \
   training.seed="${SEED:-0}" env.num_workers="${NUM_WORKERS}" \
   env.dataset.n_rollout="${N_ROLLOUT}" \
   regularizer.num_projections="${NUM_PROJECTIONS}" \
   "${predictor_overrides[@]}" \
-  ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${CKPT_BASE}/outputs/${RUN_NAME}"
+  ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${CKPT_BASE}/outputs/${RUN_NAME}" \
+  hydra.job.chdir=true

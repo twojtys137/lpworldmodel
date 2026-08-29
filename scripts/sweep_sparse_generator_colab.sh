@@ -10,6 +10,7 @@ BATCH_SIZE=${BATCH_SIZE:-16}
 N_ROLLOUT=${N_ROLLOUT:-50}
 NUM_PROJECTIONS=${NUM_PROJECTIONS:-256}
 NUM_WORKERS=${NUM_WORKERS:-2}
+ENV_NAME=${ENV_NAME:-pusht}
 
 if [ "${SMOKE:-0}" = "1" ]; then
   EPOCHS=1
@@ -49,7 +50,7 @@ for predictor in ${VARIANTS}; do
       ;;
   esac
 
-  run_name="dense_patch64_${predictor}_seed${SEED:-0}"
+  run_name="dense_patch64_${predictor}_${ENV_NAME}_seed${SEED:-0}"
   if [ "${SMOKE:-0}" = "1" ]; then
     run_name=${run_name}_smoke
   fi
