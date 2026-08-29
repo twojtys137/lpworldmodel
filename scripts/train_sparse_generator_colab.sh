@@ -44,6 +44,12 @@ if [ "${SMOKE:-0}" = "1" ]; then
   NUM_PROJECTIONS=64
   RUN_NAME=${RUN_NAME}_smoke
 fi
+RUN_DIR=${CKPT_BASE}/outputs/${RUN_NAME}
+if [ -f "${RUN_DIR}/checkpoints/model_latest.pth" ] && [ "${RESUME:-0}" != "1" ]; then
+  echo "Checkpoint already exists: ${RUN_DIR}/checkpoints/model_latest.pth" >&2
+  echo "Use a new RUN_NAME, or set RESUME=1 to train for EPOCHS additional epochs." >&2
+  exit 1
+fi
 
 export WANDB_MODE=${WANDB_MODE:-offline}
 export WANDB_ENTITY=${WANDB_ENTITY:-twojtys137-tw}
@@ -96,7 +102,7 @@ esac
 
 cd "${REPO}"
 echo "Environment: ${ENV_NAME}; data: ${DATASET_DIR}/${dataset_subdir}"
-echo "Persistent run directory: ${CKPT_BASE}/outputs/${RUN_NAME}"
+echo "Persistent run directory: ${RUN_DIR}"
 echo "W&B: ${WANDB_MODE} (${WANDB_ENTITY}/${WANDB_PROJECT})"
 python train.py --config-name train_sparse_generator.yaml \
   env="${ENV_NAME}" frameskip="${FRAMESKIP}" num_hist="${NUM_HIST}" \
@@ -106,5 +112,5 @@ python train.py --config-name train_sparse_generator.yaml \
   env.dataset.n_rollout="${N_ROLLOUT}" \
   regularizer.num_projections="${NUM_PROJECTIONS}" \
   "${predictor_overrides[@]}" \
-  ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${CKPT_BASE}/outputs/${RUN_NAME}" \
+  ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${RUN_DIR}" \
   hydra.job.chdir=true

@@ -8,6 +8,18 @@ from omegaconf import OmegaConf
 from typing import Callable, Dict
 import psutil
 
+
+def load_trusted_checkpoint(filename, map_location=None):
+    """Load an object checkpoint created by this repository.
+
+    LpWM checkpoints contain complete ``nn.Module`` and optimizer objects rather
+    than tensor-only state dicts. PyTorch 2.6 changed ``torch.load`` to default to
+    ``weights_only=True``, so repository-created checkpoints must opt out
+    explicitly. Never use this helper for a checkpoint from an untrusted source.
+    """
+    return torch.load(filename, map_location=map_location, weights_only=False)
+
+
 def get_ram_usage():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / (1024 * 1024 * 1024)  # Memory usage in MB

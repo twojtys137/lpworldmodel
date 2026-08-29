@@ -19,7 +19,7 @@ from env.venv import SubprocVectorEnv
 from custom_resolvers import replace_slash
 from preprocessor import Preprocessor
 from planning.evaluator import PlanEvaluator
-from utils import cfg_to_dict, seed
+from utils import cfg_to_dict, load_trusted_checkpoint, seed
 
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
@@ -351,8 +351,7 @@ class PlanWorkspace:
 
 
 def load_ckpt(snapshot_path, device):
-    with snapshot_path.open("rb") as f:
-        payload = torch.load(f, map_location=device)
+    payload = load_trusted_checkpoint(snapshot_path, map_location=device)
     loaded_keys = []
     result = {}
     for k, v in payload.items():
@@ -380,11 +379,11 @@ def load_model(model_ckpt, train_cfg, num_action_repeat, device):
         base_path = os.path.dirname(os.path.abspath(__file__))
         if train_cfg.env.decoder_path is not None:
             decoder_path = os.path.join(base_path, train_cfg.env.decoder_path)
-            ckpt = torch.load(decoder_path)
+            ckpt = load_trusted_checkpoint(decoder_path)
             if isinstance(ckpt, dict):
                 result["decoder"] = ckpt["decoder"]
             else:
-                result["decoder"] = torch.load(decoder_path)
+                result["decoder"] = ckpt
         else:
             raise ValueError(
                 "Decoder path not found in model checkpoint \

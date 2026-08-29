@@ -21,7 +21,13 @@ from hydra.core.hydra_config import HydraConfig
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from metrics.image_metrics import eval_images
-from utils import slice_trajdict_with_t, cfg_to_dict, seed, sample_tensors
+from utils import (
+    slice_trajdict_with_t,
+    cfg_to_dict,
+    load_trusted_checkpoint,
+    seed,
+    sample_tensors,
+)
 
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
@@ -199,7 +205,7 @@ class Trainer:
         return ckpt_path, model_name, model_epoch
 
     def load_ckpt(self, filename="model_latest.pth"):
-        ckpt = torch.load(filename)
+        ckpt = load_trusted_checkpoint(filename)
         for k, v in ckpt.items():
             self.__dict__[k] = v
         not_in_ckpt = set(self._keys_to_save) - set(ckpt.keys())
@@ -294,11 +300,11 @@ class Trainer:
                     decoder_path = os.path.join(
                         self.base_path, self.cfg.env.decoder_path
                     )
-                    ckpt = torch.load(decoder_path)
+                    ckpt = load_trusted_checkpoint(decoder_path)
                     if isinstance(ckpt, dict):
                         self.decoder = ckpt["decoder"]
                     else:
-                        self.decoder = torch.load(decoder_path)
+                        self.decoder = ckpt
                     log.info(f"Loaded decoder from {decoder_path}")
                 else:
                     self.decoder = hydra.utils.instantiate(
@@ -900,8 +906,12 @@ class Trainer:
 
 @hydra.main(config_path="conf", config_name="train")
 def main(cfg: OmegaConf):
-    trainer = Trainer(cfg)
-    trainer.run()
+    try:
+        trainer = Trainer(cfg)
+        trainer.run()
+    finally:
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

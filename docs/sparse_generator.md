@@ -122,6 +122,10 @@ bash scripts/sweep_sparse_generator_colab.sh
 RUN=1 SMOKE=1 bash scripts/sweep_sparse_generator_colab.sh
 ```
 
+The wrapper refuses to overwrite or implicitly continue an existing checkpoint.
+Set `RESUME=1` only intentionally; `EPOCHS` then means additional training epochs.
+Use a new `RUN_NAME` for an independent run.
+
 The notebook [`notebooks/sparse_generator_colab.ipynb`](../notebooks/sparse_generator_colab.ipynb)
 contains the same workflow. It keeps the original dataset on fast, ephemeral Colab
 storage and writes checkpoints, Hydra outputs, and W&B files to MyDrive. Add
