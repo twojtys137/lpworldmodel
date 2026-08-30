@@ -83,4 +83,4 @@ python train.py --config-name train_rdmreg.yaml \
     encoder="${ENCODER}" link="${LINK}" regularizer="${REGULARIZER}" \
     target_p="${TARGET_P}" agg="${AGG}" \
     training.epochs="${EPOCHS}" training.batch_size="${BATCH}" env.num_workers="${NUM_WORKERS}" \
-    ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${RUNDIR}" ${EXTRA}
+    ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${RUNDIR}" hydra.job.chdir=true ${EXTRA}

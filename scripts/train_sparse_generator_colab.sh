@@ -36,6 +36,11 @@ NUM_PROJECTIONS=${NUM_PROJECTIONS:-256}
 PREDICTOR=${PREDICTOR:-sparse_generator}
 RUN_NAME=${RUN_NAME:-${PREDICTOR}_${ENV_NAME}_seed${SEED:-0}}
 CKPT_BASE=${CKPT_BASE:-${REPO}/runs}
+STATE_LINK=${STATE_LINK:-identity}
+TARGET_P=${TARGET_P:-2}
+MU=${MU:-0}
+AGG=${AGG:-btp}
+REG_WEIGHT=${REG_WEIGHT:-0.5}
 
 if [ "${SMOKE:-0}" = "1" ]; then
   EPOCHS=1
@@ -100,16 +105,23 @@ case "${PREDICTOR}" in
     ;;
 esac
 
+dataset_overrides=()
+if [ -n "${N_ROLLOUT}" ] && [ "${N_ROLLOUT}" != "all" ]; then
+  dataset_overrides+=("env.dataset.n_rollout=${N_ROLLOUT}")
+fi
+
 cd "${REPO}"
 echo "Environment: ${ENV_NAME}; data: ${DATASET_DIR}/${dataset_subdir}"
 echo "Persistent run directory: ${RUN_DIR}"
 echo "W&B: ${WANDB_MODE} (${WANDB_ENTITY}/${WANDB_PROJECT})"
+echo "State: link=${STATE_LINK}, target_p=${TARGET_P}, mu=${MU}, agg=${AGG}; predictor=${PREDICTOR}"
 python train.py --config-name train_sparse_generator.yaml \
   env="${ENV_NAME}" frameskip="${FRAMESKIP}" num_hist="${NUM_HIST}" \
-  predictor="${PREDICTOR}" \
+  predictor="${PREDICTOR}" link="${STATE_LINK}" \
+  target_p="${TARGET_P}" mu="${MU}" agg="${AGG}" reg_weight="${REG_WEIGHT}" \
   training.epochs="${EPOCHS}" training.batch_size="${BATCH_SIZE}" \
   training.seed="${SEED:-0}" env.num_workers="${NUM_WORKERS}" \
-  env.dataset.n_rollout="${N_ROLLOUT}" \
+  "${dataset_overrides[@]}" \
   regularizer.num_projections="${NUM_PROJECTIONS}" \
   "${predictor_overrides[@]}" \
   ckpt_base_path="${CKPT_BASE}" hydra.run.dir="${RUN_DIR}" \

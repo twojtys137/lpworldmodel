@@ -345,6 +345,7 @@ class PlanWorkspace:
             )
             for key, value in logs.items()
         }
+        logs_entry["final_eval/successes"] = successes.astype(int).tolist()
         with open(self.log_filename, "a") as file:
             file.write(json.dumps(logs_entry) + "\n")
         return logs
@@ -440,10 +441,14 @@ def planning_main(cfg_dict):
         model_cfg = OmegaConf.load(f)
 
     if cfg_dict["wandb_logging"]:
+        wandb_project = cfg_dict.get("wandb_project") or f"InfoJEPA_eval_{model_cfg.env.name}"
+        wandb_entity = cfg_dict.get("wandb_entity") or os.environ.get("WANDB_ENTITY")
         wandb_run = wandb.init(
-            project=f"InfoJEPA_eval_{model_cfg.env.name}", config=cfg_dict
+            entity=wandb_entity,
+            project=wandb_project,
+            config=cfg_dict,
         )
-        wandb.run.name = "{}".format(output_dir.split("plan_outputs/")[-1])
+        wandb.run.name = cfg_dict.get("wandb_run_name") or Path(output_dir).name
     else:
         wandb_run = None
 
@@ -508,4 +513,8 @@ def main(cfg: OmegaConf):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if wandb.run is not None:
+            wandb.finish()

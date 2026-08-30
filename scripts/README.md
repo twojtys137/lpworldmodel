@@ -34,6 +34,8 @@ Checkpoints/run dirs are written under `CKPT_BASE` (default `./runs`); override 
 | `reproduce_pusht.sh` | drives the full PushT sparsity-vs-linearity grid (train + eval per cell) |
 | `train_sparse_generator_colab.sh` | budgeted dense-patch / sparse-law PushT experiment |
 | `sweep_sparse_generator_colab.sh` | dry-run/execute the controlled dense-state ablations |
+| `benchmark_lpwm_sparse_generator_colab.sh` | fair 2x2 + literal LpWM/LeWM training, paired planning and result collection |
+| `collect_lpwm_benchmark.py` | builds seed-level and aggregate JSON/CSV/Markdown benchmark tables |
 
 Each script's header comment lists its positional args and env-var knobs.
 
@@ -62,3 +64,47 @@ ENV_NAME=wall SMOKE=1 bash scripts/train_sparse_generator_colab.sh
 bash scripts/sweep_sparse_generator_colab.sh
 RUN=1 SMOKE=1 bash scripts/sweep_sparse_generator_colab.sh
 ```
+
+## Fair LpWM comparison on Colab
+
+The fair benchmark separates two questions:
+
+1. a controlled patch-field 2x2 (`dense|sparse` state x `dense|sparse` generator),
+   where architecture, parameter bank, data and optimization are fixed; and
+2. literal CLS+D384 Deep-AdaLN LpWM/LeWM controls, evaluated by the same downstream
+   PushT planner. Raw latent errors should only be compared within a matched block;
+   planning success is the cross-architecture endpoint.
+
+The launcher is a dry-run unless `RUN=1` is explicit. It uses deterministic run
+names, skips completed checkpoints, refuses implicit continuation, persists planning
+outputs under `CKPT_BASE`, and records every cell in a benchmark manifest.
+
+```bash
+# Inspect the four controlled cells, then run seed 0 screening.
+PROFILE=screen STAGE=train SEEDS=0 bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+RUN=1 PROFILE=screen STAGE=train SEEDS=0 bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+
+# Promote the controlled cells to three seeds and evaluate identical planning goals.
+RUN=1 PROFILE=screen STAGE=train SEEDS="0 1 2" \
+  bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+RUN=1 PROFILE=screen STAGE=plan SEEDS="0 1 2" \
+  bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+
+# Final full-data comparison, including exact paper controls and strong LTV controls.
+export MODELS="lpwm lewm dense_dense dense_sparse sparse_dense sparse_sparse ltv sparse_ltv"
+PROFILE=full STAGE=train MODELS="${MODELS}" SEEDS="0 1 2" \
+  bash scripts/benchmark_lpwm_sparse_generator_colab.sh  # dry-run
+RUN=1 PROFILE=full STAGE=train MODELS="${MODELS}" SEEDS="0 1 2" \
+  bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+RUN=1 PROFILE=full STAGE=plan MODELS="${MODELS}" SEEDS="0 1 2" \
+  bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+
+# Refresh local results from local logs and, when online, W&B.
+PROFILE=full STAGE=collect bash scripts/benchmark_lpwm_sparse_generator_colab.sh
+```
+
+The final command writes `benchmark_results.{json,csv,md}` plus aggregate
+`benchmark_aggregate.{json,csv}` under
+`${CKPT_BASE}/benchmarks/${BENCHMARK_ID:-fair_lpwm_v1}`. Aggregates report mean and
+95% Student-t intervals across completed training seeds. Planning uses one fixed
+`PLAN_SEED` (99 by default), so every model sees the same evaluation goals.

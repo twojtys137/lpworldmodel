@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import hydra
 import torch
 import wandb
@@ -34,6 +35,7 @@ log = logging.getLogger(__name__)
 
 class Trainer:
     def __init__(self, cfg):
+        self.run_started_at = time.time()
         self.cfg = cfg
         with open_dict(cfg):
             cfg["saved_folder"] = os.getcwd()
@@ -362,6 +364,18 @@ class Trainer:
             log.info("Applied muP init to trained scratch modules "
                      f"(encoder={self.train_encoder}, predictor={self.predictor is not None}, "
                      f"decoder={self.decoder is not None and self.train_decoder}).")
+
+        self.num_parameters = sum(parameter.numel() for parameter in self.model.parameters())
+        self.num_trainable_parameters = sum(
+            parameter.numel()
+            for parameter in self.model.parameters()
+            if parameter.requires_grad
+        )
+        log.info(
+            "Parameters: total=%d trainable=%d",
+            self.num_parameters,
+            self.num_trainable_parameters,
+        )
 
     def init_optimizers(self):
         mup = self.cfg.get("mup", False)
@@ -829,10 +843,20 @@ class Trainer:
             to_log = sum / count
             epoch_log[key] = to_log
         epoch_log["epoch"] = step
+        epoch_log["num_parameters"] = self.num_parameters
+        epoch_log["num_trainable_parameters"] = self.num_trainable_parameters
+        epoch_log["elapsed_time_sec"] = time.time() - self.run_started_at
+        epoch_log["max_cuda_memory_mb"] = (
+            torch.cuda.max_memory_allocated(self.device) / (1024**2)
+            if self.device.type == "cuda"
+            else 0.0
+        )
         log.info(f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
                 Validation loss: {epoch_log['val_loss']:.4f}")
 
         if self.accelerator.is_main_process:
+            with open("metrics.jsonl", "a", encoding="utf-8") as metrics_file:
+                metrics_file.write(json.dumps(epoch_log) + "\n")
             self.wandb_run.log(epoch_log)
         self.epoch_log = OrderedDict()
 
@@ -910,6 +934,8 @@ def main(cfg: OmegaConf):
         trainer = Trainer(cfg)
         trainer.run()
     finally:
+        if wandb.run is not None:
+            wandb.finish()
         if dist.is_available() and dist.is_initialized():
             dist.destroy_process_group()
 
