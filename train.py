@@ -1,6 +1,5 @@
 import os
 import time
-import json
 import hydra
 import torch
 import wandb
@@ -22,6 +21,7 @@ from hydra.core.hydra_config import HydraConfig
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from metrics.image_metrics import eval_images
+from metric_logging import append_metrics_jsonl, metric_scalar
 from utils import (
     slice_trajdict_with_t,
     cfg_to_dict,
@@ -827,13 +827,13 @@ class Trainer:
 
     def logs_update(self, logs):
         for key, value in logs.items():
-            if isinstance(value, torch.Tensor):
-                value = value.detach().cpu().item()
-            length = len(value)
+            values = value if isinstance(value, (list, tuple)) else [value]
+            scalar_values = [metric_scalar(item) for item in values]
+            length = len(scalar_values)
             count, total = self.epoch_log.get(key, (0, 0.0))
             self.epoch_log[key] = (
                 count + length,
-                total + sum(value),
+                total + sum(scalar_values),
             )
 
     def logs_flash(self, step):
@@ -855,9 +855,8 @@ class Trainer:
                 Validation loss: {epoch_log['val_loss']:.4f}")
 
         if self.accelerator.is_main_process:
-            with open("metrics.jsonl", "a", encoding="utf-8") as metrics_file:
-                metrics_file.write(json.dumps(epoch_log) + "\n")
-            self.wandb_run.log(epoch_log)
+            persisted_epoch_log = append_metrics_jsonl("metrics.jsonl", epoch_log)
+            self.wandb_run.log(persisted_epoch_log)
         self.epoch_log = OrderedDict()
 
     def plot_samples(
@@ -930,12 +929,16 @@ class Trainer:
 
 @hydra.main(config_path="conf", config_name="train")
 def main(cfg: OmegaConf):
+    exit_code = 0
     try:
         trainer = Trainer(cfg)
         trainer.run()
+    except BaseException:
+        exit_code = 1
+        raise
     finally:
         if wandb.run is not None:
-            wandb.finish()
+            wandb.finish(exit_code=exit_code)
         if dist.is_available() and dist.is_initialized():
             dist.destroy_process_group()
 
