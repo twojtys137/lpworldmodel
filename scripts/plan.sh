@@ -10,9 +10,10 @@
 #                     plan_pusht.yaml / plan_wall.yaml   (DINO-WM concat baselines)
 #     <model_name>  : run-dir name under $CKPT_BASE/outputs/  (matches train.sh's RUN_NAME)
 #     <epoch>       : latest | <int>
-# Env-var overrides: SEED (plan.py seed=), GOAL_H (planning horizon), CKPT_BASE
-# (default ./runs), PLAN_OUTPUT_DIR (persistent Hydra output), WANDB_ENTITY and
-# WANDB_PROJECT.
+# Env-var overrides: SEED, GOAL_H, CKPT_BASE, PLAN_OUTPUT_DIR, WANDB_ENTITY,
+# WANDB_PROJECT, WANDB_RUN_NAME, EVALUATION_MODE (plan|gt_replay),
+# OBJECTIVE_ALPHA, GOAL_SOURCE, GOAL_FILE_PATH, CEM_EVAL_EVERY,
+# CEM_OPT_STEPS, and CEM_NUM_SAMPLES.
 set -euo pipefail
 CONFIG=${1:?usage: plan.sh <plan_config> <model_name> <epoch> [n_evals] [max_iter]}
 MODEL_NAME=${2:?need model_name}; EPOCH=${3:?need epoch}
@@ -27,13 +28,20 @@ export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy}   # headless pygame rendering (
 EXTRA=()
 [ -n "${SEED:-}" ] && EXTRA+=("seed=${SEED}")
 [ -n "${GOAL_H:-}" ] && EXTRA+=("goal_H=${GOAL_H}")
+[ -n "${EVALUATION_MODE:-}" ] && EXTRA+=("evaluation_mode=${EVALUATION_MODE}")
+[ -n "${OBJECTIVE_ALPHA:-}" ] && EXTRA+=("objective.alpha=${OBJECTIVE_ALPHA}")
+[ -n "${GOAL_SOURCE:-}" ] && EXTRA+=("goal_source=${GOAL_SOURCE}")
+[ -n "${GOAL_FILE_PATH:-}" ] && EXTRA+=("goal_file_path=${GOAL_FILE_PATH}")
+[ -n "${CEM_EVAL_EVERY:-}" ] && EXTRA+=("planner.sub_planner.eval_every=${CEM_EVAL_EVERY}")
+[ -n "${CEM_OPT_STEPS:-}" ] && EXTRA+=("planner.sub_planner.opt_steps=${CEM_OPT_STEPS}")
+[ -n "${CEM_NUM_SAMPLES:-}" ] && EXTRA+=("planner.sub_planner.num_samples=${CEM_NUM_SAMPLES}")
 [ -n "${PLAN_OUTPUT_DIR:-}" ] && EXTRA+=(
   "hydra.run.dir=${PLAN_OUTPUT_DIR}"
   "hydra.job.chdir=true"
 )
 [ -n "${WANDB_ENTITY:-}" ] && EXTRA+=("+wandb_entity=${WANDB_ENTITY}")
 [ -n "${WANDB_PROJECT:-}" ] && EXTRA+=("+wandb_project=${WANDB_PROJECT}")
-EXTRA+=("+wandb_run_name=plan_${MODEL_NAME}_seed${SEED:-99}")
+EXTRA+=("+wandb_run_name=${WANDB_RUN_NAME:-plan_${MODEL_NAME}_seed${SEED:-99}}")
 
 cd "${REPO}"
 python plan.py --config-name "${CONFIG}" \

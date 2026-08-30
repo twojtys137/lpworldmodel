@@ -137,6 +137,12 @@ class PlanWorkspace:
         self.goal_H = cfg_dict["goal_H"]
         self.action_dim = self.dset.action_dim * self.frameskip
         self.debug_dset_init = cfg_dict["debug_dset_init"]
+        self.evaluation_mode = cfg_dict.get("evaluation_mode", "plan")
+        if self.evaluation_mode not in {"plan", "gt_replay"}:
+            raise ValueError(
+                "evaluation_mode must be either 'plan' or 'gt_replay', got "
+                f"{self.evaluation_mode!r}"
+            )
 
         objective_fn = hydra.utils.call(
             cfg_dict["objective"],
@@ -176,24 +182,26 @@ class PlanWorkspace:
             self.wandb_run = DummyWandbRun()
 
         self.log_filename = "logs.json"  # planner and final eval logs are dumped here
-        self.planner = hydra.utils.instantiate(
-            self.cfg_dict["planner"],
-            wm=self.wm,
-            env=self.env,  # only for mpc
-            action_dim=self.action_dim,
-            objective_fn=objective_fn,
-            preprocessor=self.data_preprocessor,
-            evaluator=self.evaluator,
-            wandb_run=self.wandb_run,
-            log_filename=self.log_filename,
-        )
+        self.planner = None
+        if self.evaluation_mode == "plan":
+            self.planner = hydra.utils.instantiate(
+                self.cfg_dict["planner"],
+                wm=self.wm,
+                env=self.env,  # only for mpc
+                action_dim=self.action_dim,
+                objective_fn=objective_fn,
+                preprocessor=self.data_preprocessor,
+                evaluator=self.evaluator,
+                wandb_run=self.wandb_run,
+                log_filename=self.log_filename,
+            )
 
-        from planning.mpc import MPCPlanner
-        if isinstance(self.planner, MPCPlanner):
-            self.planner.sub_planner.horizon = cfg_dict["goal_H"]
-            self.planner.n_taken_actions = cfg_dict["goal_H"]
-        else:
-            self.planner.horizon = cfg_dict["goal_H"]
+            from planning.mpc import MPCPlanner
+            if isinstance(self.planner, MPCPlanner):
+                self.planner.sub_planner.horizon = cfg_dict["goal_H"]
+                self.planner.n_taken_actions = cfg_dict["goal_H"]
+            else:
+                self.planner.horizon = cfg_dict["goal_H"]
 
         self.dump_targets()
 
@@ -207,6 +215,7 @@ class PlanWorkspace:
             observations, states, actions, env_info = (
                 self.sample_traj_segment_from_dset(traj_len=2)
             )
+            self.env_info = env_info
             self.env.update_env(env_info)
 
             # sample random states
@@ -234,6 +243,7 @@ class PlanWorkspace:
             observations, states, actions, env_info = (
                 self.sample_traj_segment_from_dset(traj_len=self.frameskip * self.goal_H + 1)
             )
+            self.env_info = env_info
             self.env.update_env(env_info)
 
             # get states from val trajs
@@ -299,12 +309,27 @@ class PlanWorkspace:
     def prepare_targets_from_file(self, file_path):
         with open(file_path, "rb") as f:
             data = pickle.load(f)
+        target_eval_seed = data.get("eval_seed", self.eval_seed)
+        if len(target_eval_seed) != self.n_evals:
+            raise ValueError(
+                f"Target file has {len(target_eval_seed)} evaluations, but n_evals="
+                f"{self.n_evals}. Use the same n_evals as the target-generation run."
+            )
+        target_goal_H = data["goal_H"]
+        if target_goal_H != self.goal_H:
+            raise ValueError(
+                f"Target file has goal_H={target_goal_H}, but requested goal_H="
+                f"{self.goal_H}. Use the same planning horizon."
+            )
+        self.eval_seed = target_eval_seed
         self.obs_0 = data["obs_0"]
         self.obs_g = data["obs_g"]
         self.state_0 = data["state_0"]
         self.state_g = data["state_g"]
         self.gt_actions = data["gt_actions"]
-        self.goal_H = data["goal_H"]
+        self.env_info = data.get("env_info")
+        if self.env_info is not None:
+            self.env.update_env(self.env_info)
 
     def dump_targets(self):
         with open("plan_targets.pkl", "wb") as f:
@@ -316,39 +341,63 @@ class PlanWorkspace:
                     "state_g": self.state_g,
                     "gt_actions": self.gt_actions,
                     "goal_H": self.goal_H,
+                    "eval_seed": self.eval_seed,
+                    "env_info": self.env_info,
                 },
                 f,
             )
         file_path = os.path.abspath("plan_targets.pkl")
         print(f"Dumped plan targets to {file_path}")
 
+    def _evaluate_and_log(self, actions, action_len, prefix, filename):
+        logs, successes, _, _ = self.evaluator.eval_actions(
+            actions.detach(), action_len, save_video=True, filename=filename
+        )
+        logs = {f"{prefix}/{key}": value for key, value in logs.items()}
+        self.wandb_run.log(logs)
+        logs_entry = {
+            key: value.item() if isinstance(value, np.generic) else value
+            for key, value in logs.items()
+        }
+        logs_entry[f"{prefix}/successes"] = successes.astype(int).tolist()
+        with open(self.log_filename, "a") as file:
+            file.write(json.dumps(logs_entry) + "\n")
+        return logs
+
     def perform_planning(self):
+        if self.evaluation_mode == "gt_replay":
+            if self.gt_actions is None:
+                raise ValueError(
+                    "Ground-truth replay requires dataset-derived targets with "
+                    "stored actions; goal_source=random_state is unsupported."
+                )
+            print(
+                "Ground-truth replay: evaluating the exact actions used to "
+                "construct the paired goals."
+            )
+            return self._evaluate_and_log(
+                actions=self.gt_actions.to(self.device),
+                action_len=None,
+                prefix="oracle_eval",
+                filename="output_oracle",
+            )
+
         if self.debug_dset_init:
             actions_init = self.gt_actions
         else:
             actions_init = None
+        assert self.planner is not None
         actions, action_len = self.planner.plan(
             obs_0=self.obs_0,
             obs_g=self.obs_g,
             actions=actions_init,
         )
-        logs, successes, _, _ = self.evaluator.eval_actions(
-            actions.detach(), action_len, save_video=True, filename="output_final"
+        return self._evaluate_and_log(
+            actions=actions,
+            action_len=action_len,
+            prefix="final_eval",
+            filename="output_final",
         )
-        logs = {f"final_eval/{k}": v for k, v in logs.items()}
-        self.wandb_run.log(logs)
-        logs_entry = {
-            key: (
-                value.item()
-                if isinstance(value, (np.float32, np.int32, np.int64))
-                else value
-            )
-            for key, value in logs.items()
-        }
-        logs_entry["final_eval/successes"] = successes.astype(int).tolist()
-        with open(self.log_filename, "a") as file:
-            file.write(json.dumps(logs_entry) + "\n")
-        return logs
 
 
 def load_ckpt(snapshot_path, device):
@@ -488,18 +537,19 @@ def planning_main(cfg_dict):
             ]
         )
 
-    plan_workspace = PlanWorkspace(
-        cfg_dict=cfg_dict,
-        wm=model,
-        dset=dset,
-        env=env,
-        env_name=model_cfg.env.name,
-        frameskip=model_cfg.frameskip,
-        wandb_run=wandb_run,
-    )
-
-    logs = plan_workspace.perform_planning()
-    return logs
+    try:
+        plan_workspace = PlanWorkspace(
+            cfg_dict=cfg_dict,
+            wm=model,
+            dset=dset,
+            env=env,
+            env_name=model_cfg.env.name,
+            frameskip=model_cfg.frameskip,
+            wandb_run=wandb_run,
+        )
+        return plan_workspace.perform_planning()
+    finally:
+        env.close()
 
 
 @hydra.main(config_path="conf", config_name="plan")

@@ -5,7 +5,8 @@ defaults:
 # Planning eval for LeWM-style (adaln) checkpoints. Env/dataset/encoder are
 # loaded from the run's saved hydra.yaml, so this config is env-agnostic — just
 # point model_name at the run dir under ${ckpt_base_path}/outputs/.
-# The objective is visual-only (adaln drops proprio, so alpha is inert here).
+# The paper CLS+AdaLN path is visual-only. Patch models may expose proprio;
+# planning diagnostics therefore compare alpha=0 and alpha=1 explicitly.
 
 hydra:
   run:
@@ -36,12 +37,18 @@ n_evals: 50
 goal_source: 'dset'
 goal_H: 5
 n_plot_samples: 10
+goal_file_path: null
+
+# plan: optimize actions with the configured planner.
+# gt_replay: bypass the planner and replay the exact dataset actions used to
+# construct the paired goals. This is a simulator/evaluator sanity check.
+evaluation_mode: plan
 
 debug_dset_init: False
 
 objective:
   _target_: planning.objectives.create_objective_fn
-  alpha: 0            # visual-only (adaln has no proprio latent); inert for adaln
+  alpha: 0            # paper-compatible visual-only default; diagnostics override for patch models
   base: 2
   mode: last
 
