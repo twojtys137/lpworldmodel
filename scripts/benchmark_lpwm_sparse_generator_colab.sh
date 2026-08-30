@@ -71,6 +71,22 @@ check_planning_dependencies() {
     echo "Rerun the Colab dependency-install cell, then retry the planning stage." >&2
     return 2
   fi
+  if ! python3 - <<'PY'
+import pymunk
+
+space = pymunk.Space()
+if not hasattr(space, "add_collision_handler"):
+    raise SystemExit(
+        f"Pymunk {pymunk.version} is incompatible with the benchmark physics; "
+        "install pymunk==6.11.1."
+    )
+space.add_collision_handler(0, 0)
+print(f"Planning physics preflight: Pymunk {pymunk.version}")
+PY
+  then
+    echo "Planning requires Pymunk 6.x; rerun the Colab dependency-install cell." >&2
+    return 2
+  fi
 }
 
 case "${PROFILE}" in

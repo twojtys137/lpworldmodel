@@ -81,4 +81,14 @@ def test_colab_installs_planning_dependencies():
 
     assert "'submitit>=1.5,<2'" in notebook
     assert "'hydra-submitit-launcher>=1.2,<2'" in notebook
+    assert "'pymunk==6.11.1'" in notebook
     assert "import hydra_plugins.hydra_submitit_launcher" in notebook
+    assert "hasattr(pymunk.Space, 'add_collision_handler')" in notebook
+
+
+def test_launcher_preflights_pymunk_collision_api():
+    launcher = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'hasattr(space, "add_collision_handler")' in launcher
+    assert "space.add_collision_handler(0, 0)" in launcher
+    assert "install pymunk==6.11.1" in launcher
