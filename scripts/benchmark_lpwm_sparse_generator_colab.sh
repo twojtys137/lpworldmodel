@@ -65,6 +65,14 @@ PLAN_SEED=${PLAN_SEED:-99}
 GOAL_H=${GOAL_H:-5}
 MAXITER=${MAXITER:-10}
 
+check_planning_dependencies() {
+  if ! python3 -c 'import submitit; import hydra_plugins.hydra_submitit_launcher' 2>/dev/null; then
+    echo "Missing planning dependencies: submitit and/or hydra-submitit-launcher." >&2
+    echo "Rerun the Colab dependency-install cell, then retry the planning stage." >&2
+    return 2
+  fi
+}
+
 case "${PROFILE}" in
   smoke)
     default_epochs=1
@@ -110,6 +118,10 @@ case "${STAGE}" in
     exit 2
     ;;
 esac
+
+if [ "${RUN}" = "1" ] && { [ "${STAGE}" = "plan" ] || [ "${STAGE}" = "all" ]; }; then
+  check_planning_dependencies
+fi
 
 if [ "${RUN}" = "1" ] && [ "${STAGE}" != "collect" ]; then
   : "${DATASET_DIR:?set DATASET_DIR to the root containing pusht_noise}"

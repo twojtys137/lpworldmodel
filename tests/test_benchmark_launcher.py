@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "benchmark_lpwm_sparse_generator_colab.sh"
+NOTEBOOK = Path(__file__).parents[1] / "notebooks" / "sparse_generator_colab.ipynb"
 
 
 def run_launcher(tmp_path, trainer_body):
@@ -73,3 +74,11 @@ def test_launcher_accepts_only_verified_training_artifacts(tmp_path):
     assert result.returncode == 0
     launcher_log = (run_dir / "launcher.log").read_text(encoding="utf-8")
     assert "verified metrics and checkpoint" in launcher_log
+
+
+def test_colab_installs_planning_dependencies():
+    notebook = NOTEBOOK.read_text(encoding="utf-8")
+
+    assert "'submitit>=1.5,<2'" in notebook
+    assert "'hydra-submitit-launcher>=1.2,<2'" in notebook
+    assert "import hydra_plugins.hydra_submitit_launcher" in notebook
