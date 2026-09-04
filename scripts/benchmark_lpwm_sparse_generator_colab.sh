@@ -18,7 +18,8 @@
 #   sparse_dense  LpWM-style sparse patch state + dense generator
 #   sparse_sparse LpWM-style sparse patch state + sparse generator
 #   ltv / sparse_ltv
-#   lewm / lpwm   literal CLS+D384+Deep-AdaLN paper controls
+#   lewm_rdm / lpwm   CLS+D384+Deep-AdaLN controls from the LpWM repository
+#   lewm             legacy alias for lewm_rdm, NOT native LeWM with SIGReg
 #
 # Typical Colab sequence:
 #   bash scripts/benchmark_lpwm_sparse_generator_colab.sh
@@ -32,7 +33,8 @@
 #   RUN=1 PROFILE=full STAGE=train MODELS="$MODELS" SEEDS="0 1 2" bash scripts/benchmark_lpwm_sparse_generator_colab.sh
 #   RUN=1 PROFILE=full STAGE=plan  MODELS="$MODELS" SEEDS="0 1 2" bash scripts/benchmark_lpwm_sparse_generator_colab.sh
 #
-# The exact LpWM/LeWM reproduction intentionally retains the paper recipe.  Set
+# These controls follow the LpWM repository's distribution-matching comparison.
+# Native LeWM has a separate runner: scripts/native_worldmodels.py. Set
 # PAPER_BATCH_SIZE=16 if you additionally want a batch-matched cross-system run.
 set -euo pipefail
 
@@ -214,7 +216,10 @@ set_model_meta() {
       META_EDGE_TOPK=64
       META_PAPER=0
       ;;
-    lewm)
+    lewm|lewm_rdm)
+      if [ "${model}" = "lewm" ]; then
+        echo "[recipe] legacy lewm means Gaussian RDM control; use native_worldmodels.py for original LeWM + SIGReg" >&2
+      fi
       META_ARCH=cls_adaln_d384
       META_PREDICTOR=ar_adaln
       META_LINK=identity
@@ -235,7 +240,7 @@ set_model_meta() {
       META_PAPER=1
       ;;
     *)
-      echo "Unknown model '${model}'. Valid: dense_dense dense_sparse sparse_dense sparse_sparse ltv sparse_ltv lewm lpwm" >&2
+      echo "Unknown model '${model}'. Valid: dense_dense dense_sparse sparse_dense sparse_sparse ltv sparse_ltv lewm_rdm lewm lpwm" >&2
       exit 2
       ;;
   esac

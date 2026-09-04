@@ -7,6 +7,7 @@ import logging
 import warnings
 import threading
 import itertools
+import random
 import numpy as np
 from tqdm import tqdm
 from omegaconf import OmegaConf, open_dict
@@ -32,6 +33,34 @@ from utils import (
 
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
+
+
+def training_epoch_range(completed_epochs, epochs, mode="additional"):
+    """Legacy epochs are additional; mode='total' sets the final epoch number."""
+    if mode not in {"additional", "total"}:
+        raise ValueError("training.epochs_mode must be 'additional' or 'total'")
+    if epochs < 0:
+        raise ValueError("training.epochs must be nonnegative")
+    final_epoch = completed_epochs + epochs if mode == "additional" else epochs
+    return range(completed_epochs + 1, final_epoch + 1)
+
+
+def capture_rng_state():
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+    }
+
+
+def restore_rng_state(state):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    if state["cuda"]:
+        torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])
+
 
 class Trainer:
     def __init__(self, cfg):
@@ -112,8 +141,6 @@ class Trainer:
             cfg.wandb_run_id = self.wandb_run.id
             OmegaConf.set_struct(cfg, True)
             wandb.run.name = "{}".format(model_name)
-            with open(os.path.join(os.getcwd(), "hydra.yaml"), "w") as f:
-                f.write(OmegaConf.to_yaml(cfg, resolve=True))
 
         seed(cfg.training.seed)
         log.info(f"Loading dataset from {self.cfg.env.dataset.data_path} ...")
@@ -158,44 +185,55 @@ class Trainer:
             {self.cfg.model.train_predictor}\
             {self.cfg.model.train_decoder}")
 
+        # Keep module objects for the existing planning loader, but optimizer
+        # state must be rebound to the parameters used by the resumed model.
         self._keys_to_save = [
-            "epoch",
+            "epoch", "encoder", "predictor", "decoder", "action_encoder",
+            "proprio_encoder", "link",
         ]
-        self._keys_to_save += (
-            ["encoder", "encoder_optimizer"] if self.train_encoder else []
-        )
-        self._keys_to_save += (
-            ["predictor", "predictor_optimizer"]
-            if self.train_predictor and self.cfg.has_predictor
-            else []
-        )
-        self._keys_to_save += (
-            ["decoder", "decoder_optimizer"]
-            if self.train_decoder and self.cfg.has_decoder
-            else []
-        )
-        self._keys_to_save += ["action_encoder", "proprio_encoder"]
-
-        link_cfg = self.cfg.get("link", None)
-        if link_cfg is not None and link_cfg.get("_target_", None) is not None:
-            self._keys_to_save += ["link"]
+        self._resume_checkpoint = None
+        self.resume_metadata = {"training_state_complete": True, "partial_resume_reasons": []}
 
         self.init_models()
         self.init_optimizers()
+        self.restore_training_state()
+        # Do not overwrite the checkpoint's planning configuration when resume
+        # validation fails (for example for an incomplete legacy checkpoint).
+        if self.accelerator.is_main_process:
+            with open(os.path.join(os.getcwd(), "hydra.yaml"), "w") as f:
+                f.write(OmegaConf.to_yaml(cfg, resolve=True))
 
         self.epoch_log = OrderedDict()
 
     def save_ckpt(self):
         self.accelerator.wait_for_everyone()
+        rng_states = [capture_rng_state()]
+        if self.accelerator.num_processes > 1:
+            rng_states = [None] * self.accelerator.num_processes
+            dist.all_gather_object(rng_states, capture_rng_state())
         if self.accelerator.is_main_process:
             if not os.path.exists("checkpoints"):
                 os.makedirs("checkpoints")
             ckpt = {}
             for k in self._keys_to_save:
+                if self.__dict__[k] is None:
+                    continue
                 if hasattr(self.__dict__[k], "module"):
                     ckpt[k] = self.accelerator.unwrap_model(self.__dict__[k])
                 else:
                     ckpt[k] = self.__dict__[k]
+            ckpt["checkpoint_version"] = 2
+            ckpt["optimizer_state_dicts"] = {
+                name: getattr(self, name).state_dict() for name in self.optimizer_names()
+            }
+            ckpt["regularizer_state_dict"] = (
+                self.regularizer.state_dict() if self.regularizer is not None else None
+            )
+            scaler = getattr(self.accelerator, "scaler", None)
+            ckpt["grad_scaler_state_dict"] = scaler.state_dict() if scaler is not None else None
+            ckpt["rng_states"] = rng_states
+            ckpt["resume_metadata"] = dict(self.resume_metadata)
+            ckpt["training_epochs_mode"] = self.cfg.training.get("epochs_mode", "additional")
             torch.save(ckpt, "checkpoints/model_latest.pth")
             torch.save(ckpt, f"checkpoints/model_{self.epoch}.pth")
             log.info("Saved model to {}".format(os.getcwd()))
@@ -207,12 +245,82 @@ class Trainer:
         return ckpt_path, model_name, model_epoch
 
     def load_ckpt(self, filename="model_latest.pth"):
-        ckpt = load_trusted_checkpoint(filename)
-        for k, v in ckpt.items():
-            self.__dict__[k] = v
-        not_in_ckpt = set(self._keys_to_save) - set(ckpt.keys())
-        if len(not_in_ckpt):
-            log.warning("Keys not found in ckpt: %s", not_in_ckpt)
+        ckpt = load_trusted_checkpoint(filename, map_location="cpu")
+        self._resume_checkpoint = ckpt
+        for name in self._keys_to_save:
+            if name in ckpt:
+                setattr(self, name, ckpt[name])
+
+    def optimizer_names(self):
+        names = []
+        if self.train_encoder:
+            names.append("encoder_optimizer")
+        if self.cfg.has_predictor and self.train_predictor:
+            names.extend(["predictor_optimizer", "action_encoder_optimizer"])
+        if self.cfg.has_decoder and self.train_decoder:
+            names.append("decoder_optimizer")
+        return names
+
+    def restore_training_state(self):
+        ckpt = self._resume_checkpoint
+        if ckpt is None:
+            return
+        states = dict(ckpt.get("optimizer_state_dicts", {}))
+        # Older trusted checkpoints stored optimizer objects. Extract state only;
+        # their serialized parameter references must never become live optimizers.
+        for name in self.optimizer_names():
+            if name not in states and ckpt.get(name) is not None:
+                states[name] = ckpt[name].state_dict()
+        missing = [name for name in self.optimizer_names() if name not in states]
+        reasons = [f"missing optimizer state: {name}" for name in missing]
+        required_modules = ["encoder", "action_encoder", "proprio_encoder"]
+        if self.cfg.has_predictor:
+            required_modules.append("predictor")
+        if self.cfg.has_decoder:
+            required_modules.append("decoder")
+        reasons.extend(f"missing module: {name}" for name in required_modules
+                       if ckpt.get(name) is None)
+        rng_states = ckpt.get("rng_states")
+        if not rng_states or len(rng_states) != self.accelerator.num_processes:
+            reasons.append("missing RNG state or changed number of processes")
+            rng_state = None
+        else:
+            rng_state = rng_states[self.accelerator.process_index]
+            if len(rng_state.get("cuda", [])) != torch.cuda.device_count():
+                reasons.append("changed number of CUDA devices")
+                rng_state = None
+        scaler = getattr(self.accelerator, "scaler", None)
+        scaler_state = ckpt.get("grad_scaler_state_dict")
+        if (scaler is None) != (scaler_state is None):
+            reasons.append("missing or incompatible mixed-precision scaler state")
+        prior = ckpt.get("resume_metadata", {})
+        reasons = list(dict.fromkeys(prior.get("partial_resume_reasons", []) + reasons))
+        if reasons and not self.cfg.training.get("allow_partial_resume", False):
+            raise RuntimeError(
+                "Complete checkpoint-state resume is unavailable: " + "; ".join(reasons) +
+                ". Start a fresh run, or explicitly set +training.allow_partial_resume=true "
+                "to accept and record a partial resume."
+            )
+        if reasons:
+            log.warning("PARTIAL TRAINING RESUME: %s", "; ".join(reasons))
+        for name in self.optimizer_names():
+            if name in states:
+                getattr(self, name).load_state_dict(states[name])
+        if self.regularizer is not None and ckpt.get("regularizer_state_dict") is not None:
+            self.regularizer.load_state_dict(ckpt["regularizer_state_dict"])
+        if scaler is not None and scaler_state is not None:
+            scaler.load_state_dict(scaler_state)
+        self.resume_metadata = {
+            "training_state_complete": not reasons,
+            "partial_resume_reasons": reasons,
+            "resumed_from_epoch": self.epoch,
+            "scope": "Epoch boundary; unchanged model, data, ordering and training configuration required",
+        }
+        # Initialization, accelerator preparation and optimizer construction can
+        # consume randomness. Restore only after all of them have finished.
+        if rng_state is not None:
+            restore_rng_state(rng_state)
+        self._resume_checkpoint = None
 
     def init_models(self):
         model_ckpt = Path(self.cfg.saved_folder) / "checkpoints" / "model_latest.pth"
@@ -229,20 +337,22 @@ class Trainer:
             for param in self.encoder.parameters():
                 param.requires_grad = False
 
-        self.proprio_encoder = hydra.utils.instantiate(
-            self.cfg.proprio_encoder,
-            in_chans=self.datasets["train"].proprio_dim,
-            emb_dim=self.cfg.proprio_emb_dim,
-        )
+        if self.proprio_encoder is None:
+            self.proprio_encoder = hydra.utils.instantiate(
+                self.cfg.proprio_encoder,
+                in_chans=self.datasets["train"].proprio_dim,
+                emb_dim=self.cfg.proprio_emb_dim,
+            )
         proprio_emb_dim = self.proprio_encoder.emb_dim
         print(f"Proprio encoder type: {type(self.proprio_encoder)}")
         self.proprio_encoder = self.accelerator.prepare(self.proprio_encoder)
 
-        self.action_encoder = hydra.utils.instantiate(
-            self.cfg.action_encoder,
-            in_chans=self.datasets["train"].action_dim,
-            emb_dim=self.cfg.action_emb_dim,
-        )
+        if self.action_encoder is None:
+            self.action_encoder = hydra.utils.instantiate(
+                self.cfg.action_encoder,
+                in_chans=self.datasets["train"].action_dim,
+                emb_dim=self.cfg.action_emb_dim,
+            )
         action_emb_dim = self.action_encoder.emb_dim
         print(f"Action encoder type: {type(self.action_encoder)}")
 
@@ -474,8 +584,9 @@ class Trainer:
             )
             self.monitor_thread.start()
 
-        init_epoch = self.epoch + 1  # epoch starts from 1
-        for epoch in range(init_epoch, init_epoch + self.total_epochs):
+        for epoch in training_epoch_range(
+            self.epoch, self.total_epochs, self.cfg.training.get("epochs_mode", "additional")
+        ):
             self.epoch = epoch
             self.accelerator.wait_for_everyone()
             self.train()

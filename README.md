@@ -11,6 +11,12 @@ The sparse-generator research branch includes a [staged Colab experiment noteboo
 for locality, goal-cost projections, action-order diagnostics and paired planning,
 with a persistent compute-budget estimate. See the [protocol and validation status](docs/theory_experiments.md).
 
+For the original implementations, use the [native baselines Colab notebook](https://colab.research.google.com/github/twojtys137/lpworldmodel/blob/experiment/theory-colab-1800/notebooks/native_worldmodels_colab.ipynb)
+and [recipe notes](docs/native_worldmodels.md). It separates native LeWM with SIGReg
+from LpWM with RDMReg, checks the published LeWM checkpoint, and evaluates training
+checkpoints at 2, 5 and 10 epochs. Ten epochs follow the LeWM PushT paper; for LpWM
+they extend the original two-epoch recipe. Local generator variants remain exploratory.
+
 ## Overview
 
 **LpWorldModel (LpWM)** is an action-conditioned Joint-Embedding Predictive Architecture (JEPA) world model that learns **sparse, non-negative representations** using **RDMReg** (Rectified Distribution-Matching Regularization).

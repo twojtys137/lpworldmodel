@@ -18,7 +18,8 @@ from omegaconf import OmegaConf
 import torch
 
 from experiments.budget import save
-from experiments.probe_core import compression_rows, fit_bases, latent_rollout, locality_probe
+from experiments.probe_core import (compression_rows, dynamics_diagnostics, fit_bases,
+                                    latent_rollout, locality_probe, scene_variance_diagnostics)
 from utils import seed
 
 
@@ -132,6 +133,7 @@ def run(args):
     save(out / "manifest.json", metadata)
     observations_for_fit, residuals_for_fit, residuals_test = [], [], []
     rows, locality, order = [], [], []
+    scene_observations = []
     rng = np.random.default_rng(args.seed+1000)
     started = time.monotonic()
     if device.type == "cuda":
@@ -155,7 +157,9 @@ def run(args):
                "rollout_to_persistence_ratio": float(residual[0].square().mean())/max(persistence, 1e-12),
                "target_channel_std": float(encoded.flatten(0, 2).std(dim=0).mean()),
                "action_response_rms": float((prediction[0]-prediction[1]).square().mean().sqrt())}
+        row.update(dynamics_diagnostics(encoded[0], prediction[0], prediction[1], history_length))
         rows.append(row)
+        scene_observations.append(encoded[0].detach().cpu())
         if sample["split"] == "calibration":
             observations_for_fit.append(encoded.cpu().numpy().reshape(-1, encoded.shape[-1]))
             residuals_for_fit.append(residual.cpu().numpy().reshape(-1, encoded.shape[-1]))
@@ -170,7 +174,9 @@ def run(args):
                 wm, dataset, config, states[(history_length-1)*skip], info, action_set,
                 prediction, history_length, args.seed*100+index)})
         # Each completed sample survives a disconnected runtime.
-        save(out / "progress.json", {"rollout": rows, "locality": locality, "order": order})
+        save(out / "progress.json", {"rollout": rows, "locality": locality, "order": order,
+                                     "representation_diagnostics": scene_variance_diagnostics(
+                                         torch.stack(scene_observations))})
         print(f"{index+1}/{args.samples}: {sample['split']}, rollout/persistence="
               f"{row['rollout_to_persistence_ratio']:.4g}", flush=True)
     bases = fit_bases(np.concatenate(observations_for_fit), np.concatenate(residuals_for_fit), args.seed)
@@ -186,6 +192,11 @@ def run(args):
     result = {"complete": True, "elapsed_seconds": time.monotonic()-started,
               "peak_gpu_bytes": torch.cuda.max_memory_allocated() if device.type == "cuda" else None,
               "rollout": rows, "locality": locality, "order": order,
+              "representation_diagnostics": scene_variance_diagnostics(torch.stack(scene_observations)),
+              "diagnostic_scope": "Scene variance keeps each patch/channel fixed. Legacy "
+                  "target_channel_std pools positions and cannot exclude a positional shortcut. "
+                  "Observed change is measured in this encoder's latent space; none of these "
+                  "statistics alone demonstrates physical-state accuracy or actual collapse.",
               "all_finite_candidate_certificates_pass": all(x["certificate_pass"] for x in compressed),
               "scope": "terminal cost projection only: the full predictor is still executed; "
                        "finite-set cost bounds do not certify simulator success"}

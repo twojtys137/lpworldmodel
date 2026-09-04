@@ -33,6 +33,7 @@ case "${FEATURE}" in
   *) echo "feature must be cls|patch|patch64" >&2; exit 1;;
 esac
 ENCODER=${ENCODER_OVERRIDE:-${ENCODER}}
+REGULARIZER=${REGULARIZER:-rdmreg}
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 : "${DATASET_DIR:?set DATASET_DIR to the dataset root (contains pusht_noise/ and wall_single/)}"
@@ -57,7 +58,13 @@ add(){ EXTRA="${EXTRA} $1"; }
 [ -n "${SEED:-}" ]       && { add "training.seed=${SEED}"; TAG="${TAG}_seed${SEED}"; }
 [ -n "${PROJ_DIM:-}" ]   && { add "encoder.proj_dim=${PROJ_DIM} action_emb_dim=${PROJ_DIM}"; TAG="${TAG}_pd${PROJ_DIM}"; }
 [ -n "${ENCODER_DIM:-}" ] && add "embed_dim=${ENCODER_DIM}"
-[ -n "${NUM_PROJECTIONS:-}" ] && add "regularizer.num_projections=${NUM_PROJECTIONS}"
+if [ -n "${NUM_PROJECTIONS:-}" ]; then
+  case "${REGULARIZER}" in
+    sigreg) add "regularizer.num_proj=${NUM_PROJECTIONS}";;
+    rdmreg|rdmreg_colab) add "regularizer.num_projections=${NUM_PROJECTIONS}";;
+    *) echo "NUM_PROJECTIONS is unsupported for ${REGULARIZER}" >&2; exit 2;;
+  esac
+fi
 [ -n "${N_ROLLOUT:-}" ] && add "env.dataset.n_rollout=${N_ROLLOUT}"
 [ -n "${LAW_TOPK:-}" ] && add "predictor.law_topk=${LAW_TOPK}"
 [ -n "${EDGE_TOPK:-}" ] && add "predictor.edge_topk=${EDGE_TOPK}"
@@ -71,7 +78,6 @@ add(){ EXTRA="${EXTRA} $1"; }
 [ -n "${TRAIN_ENCODER:-}" ] && add "model.train_encoder=${TRAIN_ENCODER}"
 [ -n "${WANDB_PROJECT:-}" ] && add "wandb_project=${WANDB_PROJECT}"
 [ "${DEBUG:-0}" = "1" ]  && add "debug=True"
-REGULARIZER=${REGULARIZER:-rdmreg}
 
 STAMP=$(date +%Y%m%d-%H%M%S); RAND=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
 RUNDIR=${CKPT_BASE}/outputs/lpwm_${LINK}_${FEATURE}_${ENV}_p${TARGET_P}_${AGG}${TAG}_${STAMP}_${RAND}

@@ -98,10 +98,25 @@ silently compare unequal epoch counts or automatically add epochs with RESUME=1.
 Training uses full data, two epochs, batch 16, 2048 RDM projections and the same
 learning-rate settings as the existing launcher. These settings are a controlled
 campaign, not a paper reproduction. In particular, the existing launcher's
-`lewm` label uses **Gaussian RDM**, not LeWM's literal SIGReg. True pretrained
-LeWM/DINO-WM comparisons require their checkpoint paths and matched evaluation
-adapters. This package currently supports the repository's AdaLN LpWM/LeWM-style
-checkpoints; it does not claim to evaluate unseen external checkpoints.
+`lewm_rdm` label uses **Gaussian RDM**, not LeWM's original SIGReg (`lewm` remains a
+legacy alias). This stage is now called `controlled_baseline`. For original LeWM
+with SIGReg and faithful LpWM settings, use the separate
+[native baselines notebook and recipe](native_worldmodels.md). Frozen probes here
+support this repository's AdaLN checkpoints, not native LeWM or DINO-WM objects.
+
+Compare each frozen model against persistence within its own latent space.
+The probes now report variance across scenes at fixed patch positions and temporal
+variance separately. Pooled patch variance alone cannot rule out an image-independent
+position template. `python -m experiments.dataset_replay --help` describes the
+config-only comparison of recorded frames/states against simulator reset and replay;
+oracle self-replay does not establish that fidelity.
+
+The local trainer preserves action/proprio encoder weights when resuming and saves
+optimizer state dictionaries (including the action optimizer), RNG and scaler.
+`+training.epochs_mode=total` trains to the requested final epoch number; the default
+remains additional epochs for compatibility. Old incomplete checkpoints require
+explicit `+training.allow_partial_resume=true` and record the missing state.
+Fresh native runs are preferred for the reference experiment.
 
 The primary 2×2 comparison matches data, epochs, batch size and regularization.
 It does not equate actual FLOP or wall time. Sparse top-k support alone does not
