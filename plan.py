@@ -138,9 +138,9 @@ class PlanWorkspace:
         self.action_dim = self.dset.action_dim * self.frameskip
         self.debug_dset_init = cfg_dict["debug_dset_init"]
         self.evaluation_mode = cfg_dict.get("evaluation_mode", "plan")
-        if self.evaluation_mode not in {"plan", "gt_replay"}:
+        if self.evaluation_mode not in {"plan", "gt_replay", "zero_action", "random_action"}:
             raise ValueError(
-                "evaluation_mode must be either 'plan' or 'gt_replay', got "
+                "evaluation_mode must be plan, gt_replay, zero_action or random_action, got "
                 f"{self.evaluation_mode!r}"
             )
 
@@ -276,30 +276,23 @@ class PlanWorkspace:
         observations = []
         env_info = []
 
-        # Check if any trajectory is long enough
-        valid_traj = [
-            self.dset[i][0]["visual"].shape[0]
-            for i in range(len(self.dset))
-            if self.dset[i][0]["visual"].shape[0] >= traj_len
-        ]
+        # Length metadata avoids decoding every video just to choose one segment.
+        excluded = set(self.cfg_dict.get("excluded_traj_ids", []))
+        valid_traj = [i for i in range(len(self.dset))
+                      if i not in excluded and self.dset.get_seq_length(i) >= traj_len]
         if len(valid_traj) == 0:
             raise ValueError("No trajectory in the dataset is long enough.")
 
+        self.target_samples = []
         # sample init_states from dset
         for i in range(self.n_evals):
-            max_offset = -1
-            while max_offset < 0:  # filter out traj that are not long enough
-                traj_id = random.randint(0, len(self.dset) - 1)
-                obs, act, state, e_info = self.dset[traj_id]
-                max_offset = obs["visual"].shape[0] - traj_len
-            state = state.numpy()
+            traj_id = random.choice(valid_traj)
+            max_offset = self.dset.get_seq_length(traj_id) - traj_len
             offset = random.randint(0, max_offset)
-            obs = {
-                key: arr[offset : offset + traj_len]
-                for key, arr in obs.items()
-            }
-            state = state[offset : offset + traj_len]
-            act = act[offset : offset + self.frameskip * self.goal_H]
+            obs, act, state, e_info = self.dset.get_frames(traj_id, range(offset, offset+traj_len))
+            state = state.numpy()
+            act = act[:self.frameskip * self.goal_H]
+            self.target_samples.append({"trajectory": traj_id, "offset": offset})
             actions.append(act)
             states.append(state)
             observations.append(obs)
@@ -328,6 +321,7 @@ class PlanWorkspace:
         self.state_g = data["state_g"]
         self.gt_actions = data["gt_actions"]
         self.env_info = data.get("env_info")
+        self.target_samples = data.get("target_samples")
         if self.env_info is not None:
             self.env.update_env(self.env_info)
 
@@ -343,6 +337,7 @@ class PlanWorkspace:
                     "goal_H": self.goal_H,
                     "eval_seed": self.eval_seed,
                     "env_info": self.env_info,
+                    "target_samples": getattr(self, "target_samples", None),
                 },
                 f,
             )
@@ -364,7 +359,30 @@ class PlanWorkspace:
             file.write(json.dumps(logs_entry) + "\n")
         return logs
 
+    def _baseline_lengths(self, actions):
+        """Credit baseline success at the same MPC boundaries, even if it later leaves."""
+        physical = rearrange(actions.cpu(), "b t (f d) -> b (t f) d", f=self.frameskip)
+        physical = self.data_preprocessor.denormalize_actions(physical).numpy()
+        _, states = self.env.rollout(self.eval_seed, self.state_0, physical)
+        lengths = np.full(self.n_evals, np.inf)
+        for boundary in range(self.goal_H, actions.shape[1]+1, self.goal_H):
+            success = self.env.eval_state(self.state_g, states[:, boundary*self.frameskip])["success"]
+            lengths[success & np.isinf(lengths)] = boundary
+        return lengths
+
     def perform_planning(self):
+        if self.evaluation_mode in {"zero_action", "random_action"}:
+            # Match MPC's total action budget, not only its first planning horizon.
+            total_horizon = self.goal_H * int(self.cfg_dict["planner"]["max_iter"])
+            shape = (self.n_evals, total_horizon, self.action_dim)
+            if self.evaluation_mode == "zero_action":
+                normalized_zero = -self.dset.action_mean / self.dset.action_std
+                actions = normalized_zero.repeat(self.frameskip).to(self.device).expand(shape).clone()
+            else:
+                actions = torch.randn(shape, device=self.device)
+            return self._evaluate_and_log(actions, self._baseline_lengths(actions),
+                                          "final_eval", self.evaluation_mode)
+
         if self.evaluation_mode == "gt_replay":
             if self.gt_actions is None:
                 raise ValueError(
@@ -515,6 +533,7 @@ def planning_main(cfg_dict):
         Path(model_path) / "checkpoints" / f"model_{cfg_dict['model_epoch']}.pth"
     )
     model = load_model(model_ckpt, model_cfg, num_action_repeat, device=device)
+    model.eval()
 
     # use dummy vector env for wall and deformable envs
     if model_cfg.env.name == "wall" or model_cfg.env.name == "deformable_env":

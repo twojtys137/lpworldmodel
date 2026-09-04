@@ -448,8 +448,18 @@ class VWorldModel(nn.Module):
         return self._link(pred[:, -1:])  # (b, 1, p, d) linked
 
     def _rollout_adaln(self, obs_0, act):
+        return self.rollout_from_latent(self.encode_obs_linked(obs_0), act)
+
+    def rollout_from_latent(self, z_obs_0, act):
+        """AdaLN rollout from an already linked observation history.
+
+        CEM can cache its fixed initial image encoding across action candidates.
+        The predictor and action encoder execute normally for every candidate.
+        """
+        if self.action_conditioning != "adaln":
+            raise ValueError("rollout_from_latent currently supports AdaLN only")
         act_emb_all = self.encode_act(act)  # (b, T_total, a)
-        emb = self._link(self.encode_obs(obs_0)["visual"])  # (b, n, p, d) linked
+        emb = z_obs_0["visual"]  # (b, n, p, d), already linked
         while emb.shape[1] < act.shape[1]:
             emb = torch.cat([emb, self._predict_next_adaln(emb, act_emb_all)], dim=1)
         emb = torch.cat([emb, self._predict_next_adaln(emb, act_emb_all)], dim=1)

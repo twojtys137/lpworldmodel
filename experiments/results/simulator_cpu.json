@@ -1,0 +1,13 @@
+{
+  "scope": "PushT simulator integration smoke only; no trained model",
+  "replay_max_state_error": 0.0,
+  "replay_identical_pixels": true,
+  "swapped_endpoint_distance": 4.523115158081055,
+  "frame_shape": [
+    5,
+    224,
+    224,
+    3
+  ],
+  "pass": true
+}

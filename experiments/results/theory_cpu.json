@@ -1,0 +1,102 @@
+{
+  "scope": "synthetic mathematical checks; no trained checkpoint or simulator",
+  "observable": {
+    "dimension": 9,
+    "horizon": 3,
+    "observable_rank": 4,
+    "max_cost_error": 2.3592239273284576e-16,
+    "pass": true
+  },
+  "locality": [
+    {
+      "n": 8,
+      "radius": 1,
+      "goal_error": 0.13520000000000001,
+      "bound": 0.3825101403403309,
+      "pass": true
+    },
+    {
+      "n": 8,
+      "radius": 3,
+      "goal_error": 0.012186026666666667,
+      "bound": 0.03447691398267516,
+      "pass": true
+    },
+    {
+      "n": 8,
+      "radius": 6,
+      "goal_error": 6.527439381130145e-05,
+      "bound": 0.00018467542557241867,
+      "pass": true
+    },
+    {
+      "n": 20,
+      "radius": 1,
+      "goal_error": 0.13520000000000001,
+      "bound": 0.3825101403403309,
+      "pass": true
+    },
+    {
+      "n": 20,
+      "radius": 3,
+      "goal_error": 0.012186026666666667,
+      "bound": 0.03447691398267516,
+      "pass": true
+    },
+    {
+      "n": 20,
+      "radius": 6,
+      "goal_error": 6.527439381130145e-05,
+      "bound": 0.00018467542557241867,
+      "pass": true
+    },
+    {
+      "n": 60,
+      "radius": 1,
+      "goal_error": 0.13520000000000001,
+      "bound": 0.3825101403403309,
+      "pass": true
+    },
+    {
+      "n": 60,
+      "radius": 3,
+      "goal_error": 0.012186026666666667,
+      "bound": 0.03447691398267516,
+      "pass": true
+    },
+    {
+      "n": 60,
+      "radius": 6,
+      "goal_error": 6.527439381130145e-05,
+      "bound": 0.00018467542557241867,
+      "pass": true
+    }
+  ],
+  "order": [
+    {
+      "h": 0.01,
+      "loop_q": 0.0001,
+      "expected": 0.0001,
+      "pass": true
+    },
+    {
+      "h": 0.03,
+      "loop_q": 0.0009,
+      "expected": 0.0009,
+      "pass": true
+    },
+    {
+      "h": 0.1,
+      "loop_q": 0.010000000000000002,
+      "expected": 0.010000000000000002,
+      "pass": true
+    },
+    {
+      "h": 0.3,
+      "loop_q": 0.09,
+      "expected": 0.09,
+      "pass": true
+    }
+  ],
+  "pass": true
+}

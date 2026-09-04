@@ -30,11 +30,19 @@ EXTRA=()
 [ -n "${GOAL_H:-}" ] && EXTRA+=("goal_H=${GOAL_H}")
 [ -n "${EVALUATION_MODE:-}" ] && EXTRA+=("evaluation_mode=${EVALUATION_MODE}")
 [ -n "${OBJECTIVE_ALPHA:-}" ] && EXTRA+=("objective.alpha=${OBJECTIVE_ALPHA}")
+[ -n "${OBJECTIVE_BASIS:-}" ] && EXTRA+=(
+  "+objective.basis_path=${OBJECTIVE_BASIS}"
+  "+objective.basis_key=${OBJECTIVE_BASIS_KEY:-goal_residual}"
+  "+objective.rank=${OBJECTIVE_RANK:?set OBJECTIVE_RANK with OBJECTIVE_BASIS}"
+)
 [ -n "${GOAL_SOURCE:-}" ] && EXTRA+=("goal_source=${GOAL_SOURCE}")
 [ -n "${GOAL_FILE_PATH:-}" ] && EXTRA+=("goal_file_path=${GOAL_FILE_PATH}")
+[ -n "${EXCLUDED_TRAJ_IDS:-}" ] && EXTRA+=("+excluded_traj_ids=${EXCLUDED_TRAJ_IDS}")
 [ -n "${CEM_EVAL_EVERY:-}" ] && EXTRA+=("planner.sub_planner.eval_every=${CEM_EVAL_EVERY}")
 [ -n "${CEM_OPT_STEPS:-}" ] && EXTRA+=("planner.sub_planner.opt_steps=${CEM_OPT_STEPS}")
 [ -n "${CEM_NUM_SAMPLES:-}" ] && EXTRA+=("planner.sub_planner.num_samples=${CEM_NUM_SAMPLES}")
+[ -n "${CEM_BATCH_SIZE:-}" ] && EXTRA+=("+planner.sub_planner.candidate_batch_size=${CEM_BATCH_SIZE}")
+[ -n "${CEM_CACHE_ENCODING:-}" ] && EXTRA+=("+planner.sub_planner.cache_initial_encoding=${CEM_CACHE_ENCODING}")
 [ -n "${PLAN_OUTPUT_DIR:-}" ] && EXTRA+=(
   "hydra.run.dir=${PLAN_OUTPUT_DIR}"
   "hydra.job.chdir=true"

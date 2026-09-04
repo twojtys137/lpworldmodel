@@ -1,0 +1,10 @@
+{
+  "scope": "local CPU verification of the experiment package; no Colab or trained PushT run",
+  "returncode": 0,
+  "summary": "40 passed, 2 warnings in 4.78s",
+  "elapsed_seconds": 6.261750887999369,
+  "python": "3.12.13",
+  "torch": "2.14.0+cpu",
+  "cuda_available": false,
+  "base_commit": "bc9046d12932749e20e8d48c1926a3a7f91c4db8"
+}

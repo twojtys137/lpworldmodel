@@ -22,6 +22,8 @@ class CEMPlanner(BasePlanner):
         wandb_run,
         logging_prefix="plan_0",
         log_filename="logs.json",
+        candidate_batch_size=None,
+        cache_initial_encoding=False,
         **kwargs,
     ):
         super().__init__(
@@ -40,6 +42,10 @@ class CEMPlanner(BasePlanner):
         self.opt_steps = opt_steps
         self.eval_every = eval_every
         self.logging_prefix = logging_prefix
+        if candidate_batch_size is not None and candidate_batch_size < 1:
+            raise ValueError("candidate_batch_size must be positive")
+        self.candidate_batch_size = candidate_batch_size or num_samples
+        self.cache_initial_encoding = cache_initial_encoding
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -61,6 +67,7 @@ class CEMPlanner(BasePlanner):
             mu = torch.cat([mu, new_mu.to(device)], dim=1)
         return mu, sigma
 
+    @torch.no_grad()
     def plan(self, obs_0, obs_g, actions=None):
         """
         Args:
@@ -75,6 +82,10 @@ class CEMPlanner(BasePlanner):
             self.preprocessor.transform_obs(obs_g), self.device
         )
         z_obs_g = self.wm.encode_obs_linked(trans_obs_g)  # match the linked rollout space
+        can_cache = (self.cache_initial_encoding and
+                     getattr(self.wm, "action_conditioning", None) == "adaln" and
+                     hasattr(self.wm, "rollout_from_latent"))
+        z_obs_0 = self.wm.encode_obs_linked(trans_obs_0) if can_cache else None
 
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
@@ -84,18 +95,6 @@ class CEMPlanner(BasePlanner):
             # optimize individual instances
             losses = []
             for traj in range(n_evals):
-                cur_trans_obs_0 = {
-                    key: repeat(
-                        arr[traj].unsqueeze(0), "1 ... -> n ...", n=self.num_samples
-                    )
-                    for key, arr in trans_obs_0.items()
-                }
-                cur_z_obs_g = {
-                    key: repeat(
-                        arr[traj].unsqueeze(0), "1 ... -> n ...", n=self.num_samples
-                    )
-                    for key, arr in z_obs_g.items()
-                }
                 action = (
                     torch.randn(self.num_samples, self.horizon, self.action_dim).to(
                         self.device
@@ -104,13 +103,21 @@ class CEMPlanner(BasePlanner):
                     + mu[traj]
                 )
                 action[0] = mu[traj]  # optional: make the first one mu itself
-                with torch.no_grad():
-                    i_z_obses, i_zs = self.wm.rollout(
-                        obs_0=cur_trans_obs_0,
-                        act=action,
-                    )
-
-                loss = self.objective_fn(i_z_obses, cur_z_obs_g)
+                candidate_losses = []
+                for start in range(0, self.num_samples, self.candidate_batch_size):
+                    batch_action = action[start:start+self.candidate_batch_size]
+                    count = len(batch_action)
+                    initial = z_obs_0 if can_cache else trans_obs_0
+                    current = {key: arr[traj:traj+1].expand(count, *arr.shape[1:])
+                               for key, arr in initial.items()}
+                    goal = {key: arr[traj:traj+1].expand(count, *arr.shape[1:])
+                            for key, arr in z_obs_g.items()}
+                    if can_cache:
+                        prediction, _ = self.wm.rollout_from_latent(current, batch_action)
+                    else:
+                        prediction, _ = self.wm.rollout(current, batch_action)
+                    candidate_losses.append(self.objective_fn(prediction, goal))
+                loss = torch.cat(candidate_losses)
                 topk_idx = torch.argsort(loss)[: self.topk]
                 topk_action = action[topk_idx]
                 losses.append(loss[topk_idx[0]].item())

@@ -7,6 +7,10 @@
 
 This repository contains the code for **LpWM: A Case for Sparse Representations in World Models** ([arXiv](https://arxiv.org/abs/2608.22764)).
 
+The sparse-generator research branch includes a [staged Colab experiment notebook](https://colab.research.google.com/github/twojtys137/lpworldmodel/blob/experiment/theory-colab-1800/notebooks/theory_experiments_colab.ipynb)
+for locality, goal-cost projections, action-order diagnostics and paired planning,
+with a persistent compute-budget estimate. See the [protocol and validation status](docs/theory_experiments.md).
+
 ## Overview
 
 **LpWorldModel (LpWM)** is an action-conditioned Joint-Embedding Predictive Architecture (JEPA) world model that learns **sparse, non-negative representations** using **RDMReg** (Rectified Distribution-Matching Regularization).
