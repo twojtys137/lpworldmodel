@@ -7,6 +7,8 @@ Installation and download are explicit commands; `run` prints its manifest unles
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import venv
 
 
 PINS = {
@@ -27,6 +28,11 @@ PINS = {
 SWM_PIN = "abdced49809d5eae38e24b27dc7b635c502c4812"
 HF_MODEL_PIN = "3970e07a65a74097a492f8954b073ec984afb09b"
 HF_DATA_PIN = "655cd446b9929369d7d406001da85c15d1457850"
+PYTHON_VERSION = "3.12"
+TORCH_VERSION = "2.11.0"
+TORCHVISION_VERSION = "0.26.0"
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+UV_VERSION = "0.11.33"
 
 
 def write_json(path, value):
@@ -68,15 +74,85 @@ def checkout(args):
     print(f"{repo}@{actual}", flush=True)
 
 
-def install(args):
-    # Separate environments are essential: native SWM uses Pymunk7, legacy LpWM6.
+def logged_install_command(command, log_path, env=None):
+    """Stream installer failures into both notebook output and a durable log."""
+    log_path = Path(log_path)
+    tail = deque(maxlen=35)
+    with log_path.open("a") as log:
+        log.write("\nCOMMAND: " + repr(list(map(str, command))) + "\n")
+        log.flush()
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, bufsize=1, env=env)
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+            tail.append(line)
+        status = process.wait()
+    if status:
+        raise RuntimeError(f"Installation command failed (exit {status}). Full log: {log_path}\n"
+                           + "".join(tail))
+
+
+def isolated_python_ready(env_dir):
+    env_dir = Path(env_dir)
+    config = env_dir / "pyvenv.cfg"
+    python = env_dir / "bin/python"
+    if not config.is_file() or not python.exists():
+        return False
+    fields = dict(line.split("=", 1) for line in config.read_text().splitlines() if "=" in line)
+    fields = {key.strip(): value.strip().lower() for key, value in fields.items()}
+    if fields.get("include-system-site-packages") != "false":
+        return False
+    try:
+        result = subprocess.run([str(python), "-I", "-c",
+                                 "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+                                capture_output=True, text=True)
+    except OSError:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == PYTHON_VERSION
+
+
+def ensure_python_environment(args, log_path):
     env_dir = location(args) / ".venv"
-    if not (env_dir / "bin/python").exists():
-        venv.EnvBuilder(with_pip=True, system_site_packages=True).create(env_dir)
+    if isolated_python_ready(env_dir):
+        return
+    uv = [shutil.which("uv")] if shutil.which("uv") else [sys.executable, "-m", "uv"]
+    if len(uv) > 1:
+        logged_install_command([sys.executable, "-m", "pip", "install", f"uv=={UV_VERSION}"], log_path)
+    if env_dir.exists():
+        if not (env_dir / "pyvenv.cfg").is_file():
+            raise RuntimeError(f"Expected a virtual environment at {env_dir}; choose a new --work directory")
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        backup = env_dir.with_name(f".venv.previous-{suffix}")
+        env_dir.rename(backup)
+        print(f"Preserved incompatible environment: {backup}", flush=True)
+    env = os.environ.copy()
+    env["UV_PYTHON_INSTALL_DIR"] = str(Path(args.work).resolve() / "python")
+    logged_install_command([*uv, "venv", "--python", PYTHON_VERSION, "--seed", str(env_dir)],
+                           log_path, env=env)
+    if not isolated_python_ready(env_dir):
+        raise RuntimeError("Failed to create an isolated Python 3.12 environment")
+
+
+def install(args):
+    # Python 3.13 cannot use the NumPy1 stack. Never inherit Colab site-packages.
+    out = Path(args.output) / "environment"
+    out.mkdir(parents=True, exist_ok=True)
+    log_path = out / f"{args.method}-install.log"
+    with log_path.open("a") as log:
+        log.write(f"\nINSTALL {datetime.now(timezone.utc).isoformat()} host={sys.version}\n")
+    print(f"Installation log: {log_path}", flush=True)
+    ensure_python_environment(args, log_path)
+    python = str(python_for(args))
+    logged_install_command([python, "-m", "pip", "install", "--only-binary=:all:",
+                            f"torch=={TORCH_VERSION}", f"torchvision=={TORCHVISION_VERSION}",
+                            "--index-url", TORCH_INDEX], log_path)
     common = ["hydra-core==1.3.2", "hydra-submitit-launcher==1.2.0", "einops",
               "wandb<1", "scikit-learn", "h5py", "hdf5plugin", "zstandard",
               "huggingface-hub<1", "pygame", "shapely", "matplotlib",
-              "imageio[ffmpeg]", "opencv-python-headless<4.12", "numpy<2"]
+              "imageio[ffmpeg]", "opencv-python-headless<4.12", "numpy==1.26.4",
+              f"torch=={TORCH_VERSION}", f"torchvision=={TORCHVISION_VERSION}"]
     if args.method == "lewm":
         packages = common + [
             f"stable-worldmodel @ git+https://github.com/galilai-group/stable-worldmodel.git@{SWM_PIN}",
@@ -87,12 +163,20 @@ def install(args):
         packages = common + ["accelerate==0.26.1", "gym==0.26.2", "pymunk==6.11.1",
                              "moviepy<2", "decord", "scikit-image", "tensorboardX",
                              "submitit", "psutil"]
-    subprocess.run([str(python_for(args)), "-m", "pip", "install", *packages], check=True)
-    freeze = subprocess.check_output([str(python_for(args)), "-m", "pip", "freeze"], text=True)
-    out = Path(args.output) / "environment" / f"{args.method}-freeze.txt"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(freeze)
-    print(f"Dependency snapshot: {out}")
+    logged_install_command([python, "-m", "pip", "install", *packages], log_path)
+    logged_install_command([python, "-m", "pip", "check"], log_path)
+    modules = ["numpy", "torch", "torchvision", "decord", "pymunk", "hydra", "h5py"]
+    if args.method == "lewm":
+        modules += ["transformers", "stable_pretraining", "stable_worldmodel"]
+    smoke = ("import importlib, json, sys; "
+             f"[importlib.import_module(name) for name in {modules!r}]; "
+             "import torch; print(json.dumps({'python':sys.version,'torch':torch.__version__,"
+             "'cuda_build':torch.version.cuda,'cuda_available':torch.cuda.is_available()})); "
+             "assert torch.version.cuda is not None, 'CUDA-enabled PyTorch required'")
+    logged_install_command([python, "-c", smoke], log_path)
+    freeze = subprocess.check_output([python, "-m", "pip", "freeze"], text=True)
+    (out / f"{args.method}-freeze.txt").write_text(freeze)
+    print(f"Dependency snapshot: {out / (args.method+'-freeze.txt')}")
 
 
 def setup_lewm_paths(args):

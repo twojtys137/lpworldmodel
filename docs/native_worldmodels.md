@@ -43,8 +43,16 @@ The stable-worldmodel commit is an explicit compatibility snapshot contemporary
 with the LeWM repository, not a claim about the authors' original environment.
 Transformers 4.57.6 preserves the checkpoint's encoder key layout. Native LeWM uses
 Pymunk 7.0.1; legacy LpWM/DINO-WM use 6.11.1. Separate venvs prevent cross-contamination.
-Other resolved dependencies, including Colab's CUDA PyTorch, are recorded by `pip freeze`.
-This is not a fully locked historical environment.
+The installer creates an isolated Python 3.12 environment via uv, regardless of the
+Colab kernel version. It installs PyTorch 2.11.0 / torchvision 0.26.0 (CUDA 12.8)
+and NumPy 1.26.4 without inheriting Colab packages. NumPy 1.26 does not support
+Python 3.13. An incompatible previous venv is retained with a timestamped suffix.
+Package resolution, import checks and the complete installer output are recorded
+in `environment/<method>-install.log`; resolved dependencies are saved by `pip freeze`.
+This is a compatibility environment, not a fully locked historical environment.
+See [NumPy support](https://numpy.org/devdocs/release/1.26.4-notes.html),
+[PyTorch package pairing](https://pytorch.org/get-started/previous-versions/) and
+[uv Python installation](https://docs.astral.sh/uv/guides/install-python/).
 
 LeWM's README manual `_object.ckpt` conversion no longer matches its actual eval.py.
 The importer retains the published tensor values and retargets Hydra imports to
