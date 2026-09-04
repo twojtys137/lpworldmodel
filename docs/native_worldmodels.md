@@ -50,6 +50,10 @@ Python 3.13. An incompatible previous venv is retained with a timestamped suffix
 Package resolution, import checks and the complete installer output are recorded
 in `environment/<method>-install.log`; resolved dependencies are saved by `pip freeze`.
 This is a compatibility environment, not a fully locked historical environment.
+CLI processes explicitly use Matplotlib's `Agg` backend so they do not inherit
+Colab's notebook-only `matplotlib_inline` backend. The install smoke check imports
+the actual stable-pretraining backbone submodule and Lightning, including their
+lazy plotting dependencies, before checkpoint preparation.
 The Linux decord 0.6.0 wheel contains a stale CPython 3.6 tag, which can make
 `pip check` fail after a successful install. The launcher accepts only that exact
 diagnostic and known Linux x86_64 wheel metadata, then requires an actual H.264

@@ -166,9 +166,13 @@ def install(args):
     logged_install_command([python, "-m", "pip", "install", *packages], log_path)
     dependency_check = Path(__file__).with_name("check_native_dependencies.py")
     logged_install_command([python, str(dependency_check)], log_path)
-    modules = ["numpy", "torch", "torchvision", "decord", "pymunk", "hydra", "h5py"]
+    modules = ["numpy", "torch", "torchvision", "decord", "pymunk", "hydra", "h5py",
+               "matplotlib.pyplot"]
     if args.method == "lewm":
-        modules += ["transformers", "stable_pretraining", "stable_worldmodel"]
+        # These packages load their submodules lazily; importing only the root
+        # misses errors encountered while Hydra constructs the encoder.
+        modules += ["transformers", "torchmetrics", "lightning.pytorch",
+                    "stable_pretraining.backbone.utils", "stable_worldmodel"]
     smoke = ("import importlib, json, sys; "
              f"[importlib.import_module(name) for name in {modules!r}]; "
              "import torch; print(json.dumps({'python':sys.version,'torch':torch.__version__,"
@@ -308,7 +312,8 @@ def command_manifest(args):
     python = str(python_for(args))
     env = {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy", "MUJOCO_GL": "egl",
            "OMP_NUM_THREADS": str(args.workers), "WANDB_MODE": os.environ.get("WANDB_MODE", "offline"),
-           "PYTHONDONTWRITEBYTECODE": "1", "WANDB_DIR": str(output / "wandb")}
+           "PYTHONDONTWRITEBYTECODE": "1", "WANDB_DIR": str(output / "wandb"),
+           "MPLBACKEND": "Agg"}
     run_name = args.run_name or f"{args.method}_native_seed{args.seed}_e{args.epochs}"
     if "/" in run_name or "\\" in run_name or run_name in {"", ".", ".."}:
         raise ValueError("run-name must be one directory name")
@@ -422,6 +427,10 @@ def run(args):
 
 
 def main():
+    # Colab exports its notebook-only inline backend into child processes.
+    # Our isolated CLI environment renders files and has no notebook frontend.
+    # Override (not setdefault) before any third-party imports or subprocesses.
+    os.environ["MPLBACKEND"] = "Agg"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["checkout", "install", "prepare-data", "prepare-checkpoint", "run"])
     parser.add_argument("--method", choices=PINS, default="lewm")
