@@ -102,10 +102,38 @@ launcher stops: this points to an evaluation/dependency/data problem that extra
 epochs cannot resolve. Once it succeeds, set `PHASE='lewm_train'` for native LeWM10ep.
 LpWM is a separate optional stage after verifying the full legacy dataset.
 
-Use fresh run names. The original legacy resume path is not assumed safe; changing
-epochs in an existing output folder is rejected. Every epoch is saved, so a timeout
-does not erase completed checkpoint files, but continuation requires an audited
-resume implementation before it can be called a continuous 10-epoch run.
+LeWM training now uses `lewm_session.py` to invoke the unchanged pinned `train.py`.
+It supplies session-boundary callbacks and an explicit full-state resume path to
+the native `stable_pretraining.Manager`. `max_epochs=10` always stays fixed, so
+the learning-rate scheduler is not rebuilt for a shorter training horizon.
+`SESSION_EPOCHS=4` stops after at most four additional epochs (use fewer if setup
+has already consumed much of the session). Planning evaluation is a separate
+`PHASE='lewm_eval'` stage. Epoch counts alone are not a wall-clock guarantee.
+
+`SPT_CACHE_DIR` is directed to `OUTPUT/lewm/training-state/RUN_NAME`. Native
+epoch-end `last.ckpt` files therefore persist on Drive, alongside `progress.json`
+with the explicit checkpoint path. Continue with the same run name, total epoch
+target and seed, a new `SESSION_ID` for budget accounting, and
+`RESUME_CHECKPOINT` set to that full checkpoint. We restore optimizer, scheduler
+and Lightning loop state via `Manager(weights_only=False)`; model-only `.pt`
+exports are rejected. New checkpoints also retain Python/NumPy/Torch and loader
+generator states. Legacy checkpoints lack this extra RNG snapshot; neither case
+claims bitwise equivalence for GPU kernels, prefetched data or worker RNG streams.
+
+Before the session wrapper is used, the notebook runs `check_lewm_resume.py`:
+a CPU Lightning integration test comparing three continuous epochs to one plus
+two resumed epochs for model weights, AdamW state, scheduler state and counters.
+This tests the resume mechanism, not native LeWM learning quality or GPU behavior.
+
+For an already-running older launcher, **wait for a completed epoch and full
+checkpoint save, then stop training without deleting the runtime**. Update only
+the launcher checkout, and run `preserve-checkpoints` before ending that runtime.
+It copies `.ckpt` files from the old local stable-pretraining cache (and the legacy
+Lightning output directory) to `OUTPUT/lewm/recovered-checkpoints`, printing an
+inventory. Select the checkpoint corresponding to the current run for resume;
+its run name, seed and total epoch target are validated before loading.
+Updating files does not retrofit checkpoint handling into a running process.
+LpWM remains fresh-run-only; the legacy LpWM resume path has not been validated.
 
 The budget guard counts **estimated wrapped-command CU only**, using the current
 rate entered from Colab. Setup, download and idle GPU time also consume units and

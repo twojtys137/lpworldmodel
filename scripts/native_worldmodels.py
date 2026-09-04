@@ -10,6 +10,7 @@ import argparse
 from collections import deque
 from datetime import datetime, timezone
 import json
+import hashlib
 import os
 from pathlib import Path
 import pickle
@@ -207,6 +208,37 @@ def setup_lewm_paths(args):
     return home, local_data
 
 
+def preserve_checkpoints(args):
+    """Copy full checkpoints out of the current runtime after training is stopped."""
+    roots = [Path(os.environ.get("SPT_CACHE_DIR", Path.home() / ".cache/stable-pretraining")),
+             Path(args.output) / "lewm/lightning"]
+    destination = Path(args.output) / "lewm/recovered-checkpoints"
+    saved = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for source in sorted(root.rglob("*.ckpt")):
+            if not source.is_file():
+                continue
+            before = source.stat()
+            tag = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:12]
+            target = destination / tag / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_suffix(".partial")
+            shutil.copy2(source, temporary)
+            after = source.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                temporary.unlink()
+                raise RuntimeError("Checkpoint changed during copy; stop training before preserving it")
+            temporary.replace(target)
+            saved.append({"source": str(source), "checkpoint": str(target.resolve()),
+                          "bytes": before.st_size})
+    if not saved:
+        raise FileNotFoundError("No full .ckpt found yet. Model-only weights_epoch_*.pt cannot restore training state.")
+    write_json(destination / "inventory.json", saved)
+    print(json.dumps(saved, indent=2), flush=True)
+
+
 def prepare_data(args):
     if args.method != "lewm":
         base = Path(args.data) / "pusht_noise"
@@ -331,6 +363,14 @@ def command_manifest(args):
                 cmd += ["wandb.enabled=true", f"wandb.config.entity={os.environ['WANDB_ENTITY']}",
                         f"wandb.config.project={os.environ.get('WANDB_PROJECT', 'lpwm-native')}"]
             train_dir = persistent / "checkpoints" / run_name
+            env["SPT_CACHE_DIR"] = str(persistent / "training-state" / run_name)
+            wrapper = Path(__file__).with_name("lewm_session.py").resolve()
+            prefix = [python, str(wrapper), "--repo", str(repo),
+                      "--session-epochs", str(args.session_epochs),
+                      "--status", str(persistent / "training-state" / run_name / "progress.json")]
+            if args.resume_checkpoint:
+                prefix += ["--resume-checkpoint", str(Path(args.resume_checkpoint).resolve())]
+            cmd = prefix + cmd[2:]
         else:
             policy = "published_lewm/weights.pt" if args.task == "published-eval" else (
                 f"{run_name}/weights_epoch_{args.epoch}.pt")
@@ -376,6 +416,8 @@ def command_manifest(args):
     return {"method": args.method, "upstream": PINS[args.method][0], "commit": PINS[args.method][1],
             "cwd": str(repo), "command": cmd, "environment": env,
             "train_dir": str(train_dir) if train_dir else None,
+            "resume_checkpoint": args.resume_checkpoint,
+            "session_epochs": args.session_epochs if args.method == "lewm" and args.task == "train" else None,
             "epoch_note": "LeWM PushT paper:10; LpWM reference:2,10 is duration ablation",
             "protocol_note": "Native LeWM50 raw actions; legacy LpWM max_iter*5*5 raw actions"}
 
@@ -403,9 +445,16 @@ def run(args):
     pin = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     if pin != manifest["commit"]:
         raise RuntimeError("Upstream checkout changed; refusing untracked recipe")
-    if manifest["train_dir"] and Path(manifest["train_dir"]).exists():
-        raise RuntimeError("Fresh runs only: choose a new run-name; native resume is not assumed safe")
-    entry = Path(args.output) / "manifests" / f"{args.method}_{args.task}_{args.run_name or 'default'}_e{args.epoch}.json"
+    if args.resume_checkpoint:
+        checkpoint = Path(args.resume_checkpoint).resolve()
+        if args.method != "lewm" or args.task != "train":
+            raise ValueError("Full resume is supported for native LeWM training only")
+        if not checkpoint.is_file() or not checkpoint.is_relative_to(Path(args.output).resolve()):
+            raise ValueError("Select a saved .ckpt under --output; use preserve-checkpoints before ending the old runtime")
+    if manifest["train_dir"] and Path(manifest["train_dir"]).exists() and not args.resume_checkpoint:
+        raise RuntimeError("Run already exists: select a full --resume-checkpoint for LeWM, or choose a new run-name")
+    suffix = datetime.now(timezone.utc).strftime("_%Y%m%dT%H%M%S%f") if args.task == "train" else ""
+    entry = Path(args.output) / "manifests" / f"{args.method}_{args.task}_{args.run_name or 'default'}_e{args.epoch}{suffix}.json"
     write_json(entry, manifest)
     env = os.environ.copy()
     env.update(manifest["environment"])
@@ -432,7 +481,8 @@ def main():
     # Override (not setdefault) before any third-party imports or subprocesses.
     os.environ["MPLBACKEND"] = "Agg"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["checkout", "install", "prepare-data", "prepare-checkpoint", "run"])
+    parser.add_argument("action", choices=["checkout", "install", "prepare-data", "prepare-checkpoint",
+                                          "preserve-checkpoints", "run"])
     parser.add_argument("--method", choices=PINS, default="lewm")
     parser.add_argument("--work", default="/content/native-worldmodels")
     parser.add_argument("--data", default="/content/native-wm-data")
@@ -445,12 +495,15 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--max-iter", type=int, default=10)
     parser.add_argument("--run-name")
+    parser.add_argument("--resume-checkpoint", help="Explicit full Lightning checkpoint saved under --output")
+    parser.add_argument("--session-epochs", type=int, default=4)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
-    if min(args.epochs, args.epoch, args.n_evals, args.workers, args.max_iter) <= 0:
+    if min(args.epochs, args.epoch, args.n_evals, args.workers, args.max_iter, args.session_epochs) <= 0:
         parser.error("epochs, episode count, workers and max-iter must be positive")
     {"checkout": checkout, "install": install, "prepare-data": prepare_data,
-     "prepare-checkpoint": prepare_checkpoint, "run": run}[args.action](args)
+     "prepare-checkpoint": prepare_checkpoint, "preserve-checkpoints": preserve_checkpoints,
+     "run": run}[args.action](args)
 
 
 if __name__ == "__main__":
