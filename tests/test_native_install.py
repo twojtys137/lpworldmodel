@@ -12,6 +12,10 @@ spec = importlib.util.spec_from_file_location(
     "native_worldmodels", Path(__file__).parents[1] / "scripts/native_worldmodels.py")
 native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
+check_spec = importlib.util.spec_from_file_location(
+    "check_native_dependencies", Path(__file__).parents[1] / "scripts/check_native_dependencies.py")
+checks = importlib.util.module_from_spec(check_spec)
+check_spec.loader.exec_module(checks)
 
 
 def make_environment(path, inherit=False):
@@ -68,3 +72,44 @@ def test_installer_error_includes_stderr_and_persistent_log(tmp_path):
     assert "resolver failure" in str(error.value)
     assert str(log) in str(error.value)
     assert "resolver failure" in log.read_text()
+
+
+@pytest.fixture
+def decord_metadata_warning(monkeypatch):
+    result = SimpleNamespace(returncode=1, stdout=checks.DECORD_WARNING + "\n")
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: result)
+    monkeypatch.setattr(checks.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(checks.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(checks.metadata, "distribution", lambda name: SimpleNamespace(
+        version="0.6.0", read_text=lambda name: checks.DECORD_WHEEL_TAG + "\n"))
+    return result
+
+
+def test_known_decord_warning_requires_successful_decode(decord_metadata_warning, monkeypatch):
+    decoded = []
+    monkeypatch.setattr(checks, "decode_test_video", lambda: decoded.append(True))
+    checks.check_dependencies()
+    assert decoded == [True]
+
+    def broken_decoder():
+        raise RuntimeError("Cannot load libdecord.so")
+
+    monkeypatch.setattr(checks, "decode_test_video", broken_decoder)
+    with pytest.raises(RuntimeError, match="Cannot load libdecord"):
+        checks.check_dependencies()
+
+
+@pytest.mark.parametrize("extra_error", ["foo requires bar, which is not installed.",
+                                       "other 0.6.0 is not supported on this platform"])
+def test_decord_exception_does_not_hide_other_errors(
+        decord_metadata_warning, monkeypatch, extra_error):
+    decord_metadata_warning.stdout += extra_error + "\n"
+    monkeypatch.setattr(checks, "decode_test_video", lambda: pytest.fail("Must fail before decode"))
+    with pytest.raises(RuntimeError, match="dependency errors"):
+        checks.check_dependencies()
+
+
+def test_decord_exception_rejects_other_platforms(decord_metadata_warning, monkeypatch):
+    monkeypatch.setattr(checks.platform, "machine", lambda: "aarch64")
+    with pytest.raises(RuntimeError, match="Unsupported decord platform"):
+        checks.check_dependencies()

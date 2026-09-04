@@ -157,14 +157,15 @@ def install(args):
         packages = common + [
             f"stable-worldmodel @ git+https://github.com/galilai-group/stable-worldmodel.git@{SWM_PIN}",
             "stable-pretraining==0.1.8", "transformers==4.57.6", "pymunk==7.0.1",
-            "lightning", "decord", "datasets", "loguru",
+            "lightning", "decord==0.6.0", "datasets", "loguru",
         ]
     else:
         packages = common + ["accelerate==0.26.1", "gym==0.26.2", "pymunk==6.11.1",
-                             "moviepy<2", "decord", "scikit-image", "tensorboardX",
+                             "moviepy<2", "decord==0.6.0", "scikit-image", "tensorboardX",
                              "submitit", "psutil"]
     logged_install_command([python, "-m", "pip", "install", *packages], log_path)
-    logged_install_command([python, "-m", "pip", "check"], log_path)
+    dependency_check = Path(__file__).with_name("check_native_dependencies.py")
+    logged_install_command([python, str(dependency_check)], log_path)
     modules = ["numpy", "torch", "torchvision", "decord", "pymunk", "hydra", "h5py"]
     if args.method == "lewm":
         modules += ["transformers", "stable_pretraining", "stable_worldmodel"]

@@ -50,6 +50,11 @@ Python 3.13. An incompatible previous venv is retained with a timestamped suffix
 Package resolution, import checks and the complete installer output are recorded
 in `environment/<method>-install.log`; resolved dependencies are saved by `pip freeze`.
 This is a compatibility environment, not a fully locked historical environment.
+The Linux decord 0.6.0 wheel contains a stale CPython 3.6 tag, which can make
+`pip check` fail after a successful install. The launcher accepts only that exact
+diagnostic and known Linux x86_64 wheel metadata, then requires an actual H.264
+video decoding and indexed batch-read test. All other dependency errors remain fatal;
+the package metadata is not rewritten. See the [upstream report](https://github.com/dmlc/decord/issues/366).
 See [NumPy support](https://numpy.org/devdocs/release/1.26.4-notes.html),
 [PyTorch package pairing](https://pytorch.org/get-started/previous-versions/) and
 [uv Python installation](https://docs.astral.sh/uv/guides/install-python/).
