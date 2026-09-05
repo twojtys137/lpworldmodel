@@ -132,6 +132,16 @@ It copies `.ckpt` files from the old local stable-pretraining cache (and the leg
 Lightning output directory) to `OUTPUT/lewm/recovered-checkpoints`, printing an
 inventory. Select the checkpoint corresponding to the current run for resume;
 its run name, seed and total epoch target are validated before loading.
+Run `scripts/select_lewm_checkpoint.py --output OUTPUT --run-name RUN_NAME
+--min-epoch 5` with the native venv to select the latest completed epoch from that
+inventory. Original LeWM passes instantiated objects to Manager, so these older
+checkpoints can lack the recipe in `hyper_parameters`. The selector then requires
+the original `OUTPUT/lewm/checkpoints/RUN_NAME/config.yaml` and a matching W&B ID
+inside the checkpoint. It validates the config's run name, seed and total epochs,
+and saves a recipe sidecar bound to the checkpoint's SHA-256 for later resume.
+It leaves checkpoint bytes intact and records the selection in
+`OUTPUT/lewm/resume_selected.json`. New session-wrapper runs explicitly include
+the three recipe fields in their Lightning hyperparameters.
 Updating files does not retrofit checkpoint handling into a running process.
 LpWM remains fresh-run-only; the legacy LpWM resume path has not been validated.
 

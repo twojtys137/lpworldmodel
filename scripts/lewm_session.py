@@ -12,20 +12,7 @@ import torch
 from lightning.pytorch.callbacks import Callback
 
 
-def validate_resume(checkpoint, run_name, max_epochs, seed):
-    for key in ("state_dict", "optimizer_states", "lr_schedulers", "loops", "epoch", "global_step"):
-        if key not in checkpoint or checkpoint[key] is None:
-            raise ValueError(f"Full training checkpoint required; missing {key}")
-    if not checkpoint["optimizer_states"] or not checkpoint["lr_schedulers"]:
-        raise ValueError("Checkpoint lacks optimizer or scheduler state")
-    batch = checkpoint["loops"].get("fit_loop", {}).get("epoch_loop.batch_progress", {})
-    if batch.get("is_last_batch") is not True:
-        raise ValueError("Use a checkpoint saved at the end of a completed epoch; mid-epoch data replay is not supported")
-    params = checkpoint.get("hyper_parameters", {})
-    for key, expected in {"output_model_name": run_name, "trainer.max_epochs": max_epochs,
-                          "seed": seed}.items():
-        if params.get(key) != expected:
-            raise ValueError(f"Resume recipe mismatch: {key}={params.get(key)!r}, expected {expected!r}")
+from lewm_checkpoint import checkpoint_digest, load_legacy_recipe, validate_resume
 
 
 class SessionBoundary(Callback):
@@ -114,7 +101,8 @@ def main():
             from omegaconf import OmegaConf
             # Task values are in the upstream module config injected below, not Hydra's own config.
             cfg = OmegaConf.from_dotlist(overrides)
-            validate_resume(checkpoint, cfg.output_model_name, trainer.max_epochs, cfg.seed)
+            validate_resume(checkpoint, cfg.output_model_name, trainer.max_epochs, cfg.seed,
+                            legacy_recipe=load_legacy_recipe(path))
             if checkpoint["epoch"] + 1 >= trainer.max_epochs:
                 raise ValueError("This checkpoint has completed the target epochs; run evaluation instead")
             if "native_session_rng" not in checkpoint:
@@ -126,6 +114,11 @@ def main():
             trainer.num_sanity_val_steps = 0
         elif kwargs.get("ckpt_path"):
             raise RuntimeError("Use explicit --resume-checkpoint to continue an existing run")
+        from omegaconf import OmegaConf
+        cfg = OmegaConf.from_dotlist(overrides)
+        kwargs["module"].save_hyperparameters({"output_model_name": cfg.output_model_name,
+                                              "trainer.max_epochs": trainer.max_epochs,
+                                              "seed": cfg.seed})
         trainer.callbacks.append(SessionBoundary(args.session_epochs, args.status))
         return original_manager(**kwargs)
 
